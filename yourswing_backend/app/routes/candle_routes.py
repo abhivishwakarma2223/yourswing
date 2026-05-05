@@ -65,27 +65,18 @@ def get_trending_stocks(db: Session = Depends(get_db)):
     stocks = crud.get_all_stocks(db)
     trending = []
     for s in stocks:
-        candles = crud.get_latest_candles(db, s.id, limit=2)
-        if not candles:
+        analysis = crud.analyze_stock_with_live_price(db, s.id)
+        if not analysis:
             continue
-        price = candles[0].close
-        change = 0.0
-        changePercent = 0.0
-        if len(candles) > 1:
-            change = round(price - candles[1].close, 2)
-            changePercent = round((change / candles[1].close) * 100, 2)
-        analysis = crud.get_latest_analysis(db, s.id)
-        signal = analysis["signal"] if analysis else "WATCH"
-        
+            
         trending.append({
-            "symbol": s.symbol.upper(),
-            "price": round(price, 2),
-            "change": change,
-            "changePercent": changePercent,
-            "signal": signal
+            "symbol": analysis["symbol"],
+            "price": analysis["live_price"],
+            "change": analysis["change"],
+            "changePercent": analysis["changePercent"],
+            "signal": analysis["signal"]
         })
     return trending
-
 @router.get("/api/analysis/{symbol}")
 def get_stock_analysis(symbol: str, db: Session = Depends(get_db)):
     symbol = symbol.upper()
@@ -106,28 +97,18 @@ def get_stock_analysis(symbol: str, db: Session = Depends(get_db)):
     except Exception as e:
         print(f"Error fetching from Yahoo: {e}")
         
-    # 3. Calculate dynamic indicators (replaces database saves)
-    analysis = crud.get_latest_analysis(db, stock.id)
+    # 3. Calculate dynamic indicators with live price overlay
+    analysis = crud.analyze_stock_with_live_price(db, stock.id)
     if not analysis:
         raise HTTPException(status_code=404, detail="Not enough data to compute analysis")
-        
-    candles = crud.get_latest_candles(db, stock.id, limit=2)
-    if not candles:
-        raise HTTPException(status_code=404, detail="No price data available")
-        
-    price = candles[0].close
-    change = 0.0
-    changePercent = 0.0
-    if len(candles) > 1:
-        change = round(price - candles[1].close, 2)
-        changePercent = round((change / candles[1].close) * 100, 2)
     
     # Format exactly as requested
     return {
-        "symbol": stock.symbol.upper(),
-        "price": round(price, 2),
-        "change": change,
-        "changePercent": changePercent,
+        "symbol": analysis["symbol"],
+        "price": analysis["live_price"],
+        "previous_close": analysis["previous_close"],
+        "change": analysis["change"],
+        "changePercent": analysis["changePercent"],
         "rsi": analysis["rsi"],
         "ema20": analysis["ema20"],
         "ema50": analysis["ema50"],

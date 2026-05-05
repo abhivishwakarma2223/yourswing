@@ -113,6 +113,48 @@ def get_latest_analysis(db, stock_id):
         "signal": signal
     }
 
+def analyze_stock_with_live_price(db: Session, stock_id: int):
+    from app.market_api import get_live_price
+    
+    analysis = get_latest_analysis(db, stock_id)
+    if not analysis:
+        return None
+        
+    stock = db.query(Stock).filter(Stock.id == stock_id).first()
+    if not stock:
+        return None
+        
+    import math
+    live_price = get_live_price(stock.symbol)
+    if math.isnan(live_price):
+        live_price = 0.0
+    
+    # Get the latest historical candle (which is yesterday's if market is open)
+    candles = get_latest_candles(db, stock_id, limit=1)
+    previous_close = candles[0].close if candles else live_price
+    if math.isnan(previous_close):
+        previous_close = 0.0
+    
+    # If live_price couldn't be fetched, fallback to previous_close
+    if live_price == 0.0 and previous_close > 0:
+        live_price = previous_close
+    
+    change = 0.0
+    change_percent = 0.0
+    if previous_close > 0:
+        change = round(live_price - previous_close, 2)
+        change_percent = round((change / previous_close) * 100, 2)
+        
+    return {
+        "symbol": stock.symbol.upper(),
+        "live_price": round(live_price, 2),
+        "previous_close": round(previous_close, 2),
+        "change": change,
+        "changePercent": change_percent,
+        **analysis
+    }
+
+
 
 
 

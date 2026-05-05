@@ -8,7 +8,7 @@ def generate_signal(indicators: dict):
     breakout = indicators.get("BREAKOUT", False)
 
     # Basic trend and momentum check
-    if ema20 > ema50 and rsi > 50:g
+    if ema20 > ema50 and rsi > 50:
     
         # Stronger confirmation for BUY
         if (macd > macd_signal or breakout) and volume_ratio > 1.0:
