@@ -19,7 +19,8 @@ def save_candles(db, stock_id, candles):
     new_candles = []
     for candle in candles:
         # Convert Pandas Timestamp to standard date to avoid timezone/type mismatch
-        candle_date = candle["candle_time"].date()
+        ct = candle["candle_time"]
+        candle_date = ct.date() if hasattr(ct, "date") else ct
         
         if candle_date in existing_dates:
             continue
@@ -125,16 +126,21 @@ def analyze_stock_with_live_price(db: Session, stock_id: int):
         return None
         
     import math
-    live_price = get_live_price(stock.symbol)
+    price_info = get_live_price(stock.symbol)
+    live_price = price_info["live_price"]
+    previous_close = price_info["previous_close"]
+    
     if math.isnan(live_price):
         live_price = 0.0
-    
-    # Get the latest historical candle (which is yesterday's if market is open)
-    candles = get_latest_candles(db, stock_id, limit=1)
-    previous_close = candles[0].close if candles else live_price
     if math.isnan(previous_close):
         previous_close = 0.0
-    
+        
+    # If previous_close is 0 from fast_info, fallback to the latest historical candle
+    if previous_close == 0.0:
+        candles = get_latest_candles(db, stock_id, limit=1)
+        if candles:
+            previous_close = candles[0].close
+        
     # If live_price couldn't be fetched, fallback to previous_close
     if live_price == 0.0 and previous_close > 0:
         live_price = previous_close

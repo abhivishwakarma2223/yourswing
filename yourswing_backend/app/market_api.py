@@ -1,6 +1,8 @@
 from datetime import datetime, time
 import pytz
 import yfinance as yf
+from sqlalchemy import text
+from app.database import engine
 
 def is_market_closed() -> bool:
     """
@@ -54,30 +56,92 @@ def fetch_daily_candles(symbol: str):
             "low": float(row["Low"]),
             "close": float(row["Close"]),
             "volume": int(row["Volume"]),
-            "candle_time": index
+            "candle_time": candle_date
         })
 
     return candles
 
-def get_live_price(symbol: str) -> float:
+def get_live_price(symbol: str) -> dict:
     """
-    Fetches the latest real-time price for a given symbol.
+    Fetches the latest real-time price and previous close for a given symbol.
     """
     try:
         stock = yf.Ticker(symbol)
         import math
         # fast_info is typically much faster for just getting the latest price
         info = stock.fast_info
+        
+        last_price = 0.0
         if 'lastPrice' in info and not math.isnan(float(info['lastPrice'])):
-            return float(info['lastPrice'])
+            last_price = float(info['lastPrice'])
             
-        # Fallback to 1m interval if fast_info fails
-        df = stock.history(period="1d", interval="1m")
+        previous_close = 0.0
+        if 'regularMarketPreviousClose' in info and not math.isnan(float(info['regularMarketPreviousClose'])):
+            previous_close = float(info['regularMarketPreviousClose'])
+        elif 'previousClose' in info and not math.isnan(float(info['previousClose'])):
+            previous_close = float(info['previousClose'])
+            
+        if last_price > 0.0 and previous_close > 0.0:
+            # Circuit Breaker Check: Indian stocks have max 20% limit. If Yahoo fast_info shows >20% change, it's garbage data.
+            percent_change = abs((last_price - previous_close) / previous_close) * 100
+            if percent_change > 20.0:
+                print(f"Suspicious fast_info data for {symbol}: {last_price} vs {previous_close}. Falling back to history.")
+                last_price = 0.0 # Force fallback
+            else:
+                return {"live_price": last_price, "previous_close": previous_close}
+        elif last_price > 0.0:
+            return {"live_price": last_price, "previous_close": previous_close}
+            
+        # Fallback to history if fast_info fails or returns garbage
+        df = stock.history(period="5d", interval="1d")
         if not df.empty:
             close_val = float(df.iloc[-1]["Close"])
             if not math.isnan(close_val):
-                return close_val
+                return {"live_price": close_val, "previous_close": previous_close}
     except Exception as e:
         print(f"Error fetching live price for {symbol}: {e}")
         
-    return 0.0
+    return {"live_price": 0.0, "previous_close": 0.0}
+
+
+def get_active_stock_symbols():
+
+    with engine.connect() as conn:
+
+        result = conn.execute(text("""
+            SELECT symbol
+            FROM stocks
+            WHERE is_active = TRUE
+        """))
+
+        symbols = [row[0] for row in result.fetchall()]
+
+    return symbols
+
+def fetch_all_active_stock_candles():
+    from app.database import SessionLocal
+    from app.crud import get_stock_by_symbol, save_candles
+
+    symbols = get_active_stock_symbols()
+
+    all_candles = {}
+    
+    with SessionLocal() as db:
+        for symbol in symbols:
+            try:
+                candles = fetch_daily_candles(symbol)
+                
+                stock = get_stock_by_symbol(db, symbol)
+                if stock and candles:
+                    save_candles(db, stock.id, candles)
+                    all_candles[symbol] = candles
+                    print(f"Fetched and saved candles for {symbol}")
+                elif not stock:
+                    print(f"Skipping {symbol}: Not found in DB")
+                else:
+                    print(f"Skipping {symbol}: No candles returned")
+
+            except Exception as e:
+                print(f"Error fetching {symbol}: {e}")
+
+    return all_candles

@@ -11,6 +11,10 @@ from sqlalchemy.exc import OperationalError
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+from apscheduler.schedulers.background import BackgroundScheduler
+import pytz
+from app.market_api import fetch_all_active_stock_candles
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(f"Connecting to database at {settings.DATABASE_URL}")
@@ -23,8 +27,26 @@ async def lifespan(app: FastAPI):
         # We don't crash here, allowing FastAPI to still boot up so you can see the logs
     except Exception as e:
         logger.error(f"An unexpected database error occurred: {e}")
+        
+    # Start the Background Scheduler
+    scheduler = BackgroundScheduler(timezone=pytz.timezone("Asia/Kolkata"))
+    # Schedule to run at 4:00 PM IST (16:00) every weekday (Monday-Friday)
+    scheduler.add_job(
+        fetch_all_active_stock_candles,
+        'cron',
+        day_of_week='mon-fri',
+        hour=16,
+        minute=0,
+        id="sync_daily_candles",
+        replace_existing=True
+    )
+    scheduler.start()
+    logger.info("Background scheduler started: Daily candle sync scheduled for 16:00 IST (Mon-Fri).")
+    
     yield
-    logger.info("Application shutting down...")
+    
+    scheduler.shutdown()
+    logger.info("Application and scheduler shutting down...")
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
