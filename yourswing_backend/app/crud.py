@@ -73,8 +73,8 @@ def get_candles_dataframe(db, stock_id):
 import math
 
 def get_latest_analysis(db, stock_id):
-    from app.indicator_engine import calculate_indicators
-    from app.strategy_engine import generate_signal
+    from app.indicator_engine import calculate_indicators, get_nifty_data
+    from app.scoring_engine import score_stock, get_signal
 
     df = get_candles_dataframe(db, stock_id)
     if df.empty:
@@ -87,6 +87,16 @@ def get_latest_analysis(db, stock_id):
         if pd.isna(v) or math.isnan(v):
             return 0.0
         return float(v)
+        
+    nifty_df = get_nifty_data()
+    market_bullish = False
+    if nifty_df is not None and not nifty_df.empty:
+        last_nifty = nifty_df.iloc[-1]
+        market_bullish = bool(last_nifty.get("MARKET_BULLISH", False))
+        
+    score_result = score_stock(latest_row.to_dict(), df, market_bullish)
+    score = score_result["total_score"]
+    signal = get_signal(score)
 
     indicators_dict = {
         "RSI": clean_val(latest_row.get("RSI", 0)),
@@ -100,8 +110,6 @@ def get_latest_analysis(db, stock_id):
         "BREAKOUT": bool(latest_row.get("BREAKOUT", False))
     }
 
-    signal = generate_signal(indicators_dict)
-
     return {
         "rsi": round(indicators_dict["RSI"], 2),
         "ema20": round(indicators_dict["EMA20"], 2),
@@ -111,7 +119,8 @@ def get_latest_analysis(db, stock_id):
         "volume_ratio": round(indicators_dict["VOLUME_RATIO"], 2),
         "relative_strength": round(indicators_dict["RELATIVE_STRENGTH"], 2),
         "breakout": indicators_dict["BREAKOUT"],
-        "signal": signal
+        "signal": signal,
+        "score": score
     }
 
 def analyze_stock_with_live_price(db: Session, stock_id: int):

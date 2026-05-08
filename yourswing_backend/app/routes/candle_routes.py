@@ -64,37 +64,32 @@ def fetch_and_save(symbol: str, db: Session = Depends(get_db)):
 def get_trending_stocks(db: Session = Depends(get_db)):
     from concurrent.futures import ThreadPoolExecutor
     from app.market_api import get_live_price
+    from app.ranking_engine import get_top_ranked_stocks
+    from app.database import get_db_connection
     import math
 
-    stocks = crud.get_all_stocks(db)
-    
-    # 1. Fetch historical analysis for all stocks synchronously from the local database
-    analyses = {}
-    symbols_to_fetch = []
-    
-    for s in stocks:
-        analysis = crud.get_latest_analysis(db, s.id)
-        if analysis:
-            analyses[s.symbol] = analysis
-            symbols_to_fetch.append(s.symbol)
-            
+    # 1. Rank Stocks using the Ranking Engine
+    # get_top_ranked_stocks takes db_conn_factory and returns top 10 stocks.
+    top_stocks = get_top_ranked_stocks(get_db_connection, limit=10)
+
+    symbols_to_fetch = [s["symbol"] for s in top_stocks]
+
     # 2. Fetch live prices concurrently without passing the DB session
     live_prices = {}
     if symbols_to_fetch:
-        with ThreadPoolExecutor(max_workers=30) as executor:
+        with ThreadPoolExecutor(max_workers=10) as executor:
             # map returns results in the exact same order as symbols_to_fetch
             results = executor.map(get_live_price, symbols_to_fetch)
             for symbol, price_info in zip(symbols_to_fetch, results):
                 live_prices[symbol] = price_info
-            
-    # 3. Combine analysis with live price and calculate dynamic change percent
+
+    # 3. Combine ranking analysis with live price and calculate dynamic change percent
     trending = []
-    for s in stocks:
-        symbol = s.symbol
-        if symbol not in analyses:
-            continue
-            
-        analysis = analyses[symbol]
+    for stock_data in top_stocks:
+        symbol = stock_data["symbol"]
+        score = stock_data["score"]
+        signal = stock_data["signal"]
+        
         price_info = live_prices.get(symbol, {"live_price": 0.0, "previous_close": 0.0})
         
         live_price = price_info["live_price"]
@@ -105,11 +100,9 @@ def get_trending_stocks(db: Session = Depends(get_db)):
         if math.isnan(previous_close):
             previous_close = 0.0
             
-        # If Yahoo didn't provide a previous close, fallback to local DB candle
+        # If Yahoo didn't provide a previous close, fallback to local DB latest close
         if previous_close == 0.0:
-            candles = crud.get_latest_candles(db, s.id, limit=1)
-            if candles:
-                previous_close = candles[0].close
+            previous_close = stock_data.get("latest_price") or 0.0
                 
         # If Yahoo couldn't fetch live price, fallback to previous close
         if live_price == 0.0 and previous_close > 0:
@@ -126,7 +119,8 @@ def get_trending_stocks(db: Session = Depends(get_db)):
             "price": round(live_price, 2),
             "change": change,
             "changePercent": change_percent,
-            "signal": analysis["signal"]
+            "signal": signal,
+            "score": score
         })
         
     return trending
@@ -171,6 +165,7 @@ def get_stock_analysis(symbol: str, db: Session = Depends(get_db)):
         "relative_strength": analysis["relative_strength"],
         "breakout": analysis["breakout"],
         "signal": analysis["signal"],
+        "score": analysis.get("score", 0.0),
         "indicators": {
             "RSI": {
                 "value": analysis["rsi"] if analysis["rsi"] else "N/A"

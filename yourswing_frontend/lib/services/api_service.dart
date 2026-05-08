@@ -34,6 +34,26 @@ class ApiService {
       return [];
     }
   }
+
+  // Fetch multiple prices in parallel
+  Future<Map<String, double>> fetchLatestPrices(List<String> symbols) async {
+    Map<String, double> prices = {};
+    try {
+      // Run all requests at the same time for speed
+      final results = await Future.wait(
+        symbols.map((s) => fetchStockAnalysis(s))
+      );
+      
+      for (int i = 0; i < symbols.length; i++) {
+        if (results[i] != null) {
+          prices[symbols[i]] = (results[i]!['price'] ?? 0.0).toDouble();
+        }
+      }
+    } catch (e) {
+      print('Error fetching multiple prices: $e');
+    }
+    return prices;
+  }
 }
 
 // Global instance for simple access

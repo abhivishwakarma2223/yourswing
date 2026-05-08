@@ -1,570 +1,501 @@
-"""  # noqa: D400
-ranking_engine.py
-=================
-Production-grade swing trading ranking engine.
+"""
+Swing Trading Score Engine
+==========================
+Each component scores on a continuous scale (not binary).
+Partial credit is given based on how strongly conditions are met.
 
-Architecture
-------------
-  RankingEngine (orchestrator)
-    └─ _SymbolProcessor      : per-symbol pipeline (fetch → indicators → score)
-    └─ RankingResult         : typed result container
-    └─ RankingReport         : final aggregated output
-
-Design Principles
------------------
-  * Fail-per-symbol isolation  – one bad ticker never poisons the batch
-  * Lazy DB connections        – pulled from a pool, never held open
-  * Deterministic ordering     – ties broken by symbol name
-  * Pluggable scorer           – swap scoring_engine without touching this file
-  * Zero global state          – all state lives inside RankingEngine instance
+Component       Max Score
+---------       ---------
+Trend               25
+Breakout            20
+Volume              15
+Momentum            15
+Relative Strength   10
+Structure            5
+Volatility           5
+Market Trend         5
+---------       ---------
+TOTAL              100
 """
 
-from __future__ import annotations
-
-import logging
 import math
-import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field, asdict
-from datetime import datetime, timezone
-from typing import Any, Optional
-
-import pandas as pd
-
-# ── Internal imports (adjust paths to match your project layout) ──────────────
-from indicator_engine import calculate_indicators, add_volume_trend
-from scoring_engine import score_stock
+import logging
 
 logger = logging.getLogger(__name__)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CONSTANTS
+# HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Minimum candles required before we attempt indicator calculation.
-# EMA200 needs 200, MACD needs 26+9, ATR needs 14 — 250 gives comfortable head room.
-MIN_CANDLES_REQUIRED = 200
-PREFERRED_CANDLES    = 250
+def _safe(val, default=0.0):
+    """Return val if it's a valid finite number, else default."""
+    try:
+        if val is None or (isinstance(val, float) and math.isnan(val)):
+            return default
+        return float(val)
+    except (TypeError, ValueError):
+        return default
 
-# Worker threads for parallel symbol processing.
-# IO-bound (DB reads) → threads scale well; keep ≤ 20 to avoid DB pool exhaustion.
-DEFAULT_WORKERS = 10
 
-# Signals ranked weakest → strongest (used for tie-breaking / filtering)
-SIGNAL_RANK = {
-    "AVOID":     0,
-    "NEUTRAL":   1,
-    "WEAK BUY":  2,
-    "BUY":       3,
-    "STRONG BUY": 4,
+def _clamp(val, lo, hi):
+    """Clamp val to [lo, hi]."""
+    return max(lo, min(hi, val))
+
+
+def _sigmoid_scale(x, center, steepness, max_score):
+    """
+    Smooth sigmoid scaling. Returns a value in (0, max_score).
+    - center:    the x value that gives ~50% of max_score
+    - steepness: how sharply the curve rises (higher = steeper)
+    """
+    try:
+        scaled = 1 / (1 + math.exp(-steepness * (x - center)))
+        return scaled * max_score
+    except (OverflowError, ZeroDivisionError):
+        return 0.0
+
+
+def _linear_scale(x, x_min, x_max, score_min, score_max):
+    """Linear interpolation between two breakpoints."""
+    if x_max == x_min:
+        return score_min
+    ratio = _clamp((x - x_min) / (x_max - x_min), 0, 1)
+    return score_min + ratio * (score_max - score_min)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. TREND  (max 25)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def score_trend(latest: dict) -> dict:
+    """
+    Sub-components:
+      - EMA Alignment         (0–12):  how cleanly EMAs stack bullish
+      - Price vs EMAs         (0–8):   how far price sits above each EMA
+      - Trend Strength        (0–5):   EMA20 vs EMA50 separation %
+    """
+    MAX = 25
+
+    ema20  = _safe(latest.get("EMA20"))
+    ema50  = _safe(latest.get("EMA50"))
+    ema200 = _safe(latest.get("EMA200"))
+    close  = _safe(latest.get("close"))
+    ts     = _safe(latest.get("TREND_STRENGTH"))  # (EMA20-EMA50)/EMA50 * 100
+
+    breakdown = {}
+
+    # ── EMA Alignment (0–12) ─────────────────────────────────────
+    # Full stack: +12,  partial stacks get proportional credit
+    if ema20 > 0 and ema50 > 0 and ema200 > 0:
+        alignment_score = 0.0
+        if ema20 > ema50:
+            # How far above? Smooth credit 0–6 based on separation
+            sep_pct = ((ema20 - ema50) / ema50) * 100  # e.g. 0 to 5%
+            alignment_score += _linear_scale(sep_pct, 0, 3, 2, 6)
+        if ema50 > ema200:
+            sep_pct = ((ema50 - ema200) / ema200) * 100
+            alignment_score += _linear_scale(sep_pct, 0, 3, 1, 6)
+    else:
+        alignment_score = 0.0
+    breakdown["ema_alignment"] = _clamp(alignment_score, 0, 12)
+
+    # ── Price vs EMAs (0–8) ──────────────────────────────────────
+    # Each EMA gives smooth credit based on how far above close is
+    price_score = 0.0
+    if ema20 > 0:
+        pct_above = ((close - ema20) / ema20) * 100   # -inf to +inf
+        price_score += _linear_scale(pct_above, -2, 4, 0, 3)   # 3pts for EMA20
+    if ema50 > 0:
+        pct_above = ((close - ema50) / ema50) * 100
+        price_score += _linear_scale(pct_above, -3, 5, 0, 3)   # 3pts for EMA50
+    if ema200 > 0:
+        pct_above = ((close - ema200) / ema200) * 100
+        price_score += _linear_scale(pct_above, -5, 8, 0, 2)   # 2pts for EMA200
+    breakdown["price_vs_emas"] = _clamp(price_score, 0, 8)
+
+    # ── Trend Strength (0–5) ─────────────────────────────────────
+    # TREND_STRENGTH = (EMA20 - EMA50) / EMA50 * 100
+    # 0% = flat, >5% = very strong
+    ts_score = _linear_scale(ts, 0, 6, 0, 5)
+    breakdown["trend_strength"] = _clamp(ts_score, 0, 5)
+
+    raw   = sum(breakdown.values())
+    final = _clamp(raw, 0, MAX)
+    return {"score": round(final, 2), "max": MAX, "breakdown": breakdown}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. BREAKOUT  (max 20)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def score_breakout(latest: dict) -> dict:
+    """
+    Sub-components:
+      - Breakout Magnitude    (0–8):  how far close broke above 20-day high
+      - Volume Confirmation   (0–7):  volume ratio on the breakout candle
+      - Candle Quality        (0–5):  body % of the breakout candle
+    """
+    MAX = 20
+
+    close        = _safe(latest.get("close"))
+    highest_20   = _safe(latest.get("HIGHEST_20"))
+    volume_ratio = _safe(latest.get("VOLUME_RATIO"), 1.0)
+    body_pct     = _safe(latest.get("CANDLE_BODY_PERCENT"))
+    is_breakout  = bool(latest.get("BREAKOUT", False))
+
+    breakdown = {}
+
+    # ── Breakout Magnitude (0–8) ─────────────────────────────────
+    if highest_20 > 0:
+        breakout_pct = ((close - highest_20) / highest_20) * 100
+        # Even a tiny break gets some credit; big breaks (>3%) near full
+        mag_score = _sigmoid_scale(breakout_pct, 1.0, 1.5, 8)
+    else:
+        mag_score = 0.0
+    breakdown["breakout_magnitude"] = _clamp(mag_score, 0, 8)
+
+    # ── Volume Confirmation (0–7) ────────────────────────────────
+    # volume_ratio: 1.0 = average, >2.0 = very strong
+    vol_score = _linear_scale(volume_ratio, 0.8, 2.5, 0, 7)
+    breakdown["volume_confirmation"] = _clamp(vol_score, 0, 7)
+
+    # ── Candle Quality (0–5) ─────────────────────────────────────
+    # body_pct 0→1: higher = more decisive bullish close
+    candle_score = _linear_scale(body_pct, 0.3, 0.85, 0, 5)
+    breakdown["candle_quality"] = _clamp(candle_score, 0, 5)
+
+    # Penalty: if confirmed breakout flag is False, dampen scores
+    if not is_breakout:
+        for k in breakdown:
+            breakdown[k] *= 0.4
+
+    raw   = sum(breakdown.values())
+    final = _clamp(raw, 0, MAX)
+    return {"score": round(final, 2), "max": MAX, "breakdown": breakdown}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. VOLUME  (max 15)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def score_volume(latest: dict) -> dict:
+    """
+    Sub-components:
+      - Volume Ratio          (0–8):  current vs 20-day average
+      - Volume Trend          (0–7):  volume direction (expanding vs shrinking)
+    """
+    MAX = 15
+
+    volume_ratio    = _safe(latest.get("VOLUME_RATIO"), 1.0)
+    # VOLUME_TREND: pass in (vol_ratio - prev_vol_ratio) if available
+    # Fallback: use volume_ratio itself as proxy for trend
+    volume_trend    = _safe(latest.get("VOLUME_TREND"), 0.0)
+
+    breakdown = {}
+
+    # ── Volume Ratio (0–8) ───────────────────────────────────────
+    # 1.0 = neutral, 2.0 = good, 3.0+ = exceptional
+    ratio_score = _sigmoid_scale(volume_ratio, 1.5, 2.0, 8)
+    breakdown["volume_ratio"] = _clamp(ratio_score, 0, 8)
+
+    # ── Volume Trend (0–7) ───────────────────────────────────────
+    # Positive trend = expanding volume = bullish confirmation
+    # volume_trend > 0 means volume is growing vs prior candles
+    trend_score = _linear_scale(volume_trend, -0.3, 0.5, 0, 7)
+    breakdown["volume_trend"] = _clamp(trend_score, 0, 7)
+
+    raw   = sum(breakdown.values())
+    final = _clamp(raw, 0, MAX)
+    return {"score": round(final, 2), "max": MAX, "breakdown": breakdown}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. MOMENTUM  (max 15)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def score_momentum(latest: dict) -> dict:
+    """
+    Sub-components:
+      - RSI Zone              (0–6):  RSI in bullish but not overbought zone
+      - MACD Signal           (0–5):  histogram strength + crossover
+      - Close Near High       (0–4):  bullish close position in candle range
+    """
+    MAX = 15
+
+    rsi          = _safe(latest.get("RSI"), 50)
+    macd_hist    = _safe(latest.get("MACD_HIST"))
+    macd         = _safe(latest.get("MACD"))
+    macd_signal  = _safe(latest.get("MACD_SIGNAL"))
+    close_near_h = _safe(latest.get("CLOSE_NEAR_HIGH"), 0.5)  # 0=at high, 1=at low
+
+    breakdown = {}
+
+    # ── RSI Zone (0–6) ───────────────────────────────────────────
+    # Sweet spot for swing buys: RSI 50–70 (momentum without overbought)
+    # Below 50: weak, Above 75: overbought risk
+    if rsi < 40:
+        rsi_score = _linear_scale(rsi, 20, 40, 0, 1)   # Very weak
+    elif rsi <= 55:
+        rsi_score = _linear_scale(rsi, 40, 55, 1, 4)   # Building momentum
+    elif rsi <= 70:
+        rsi_score = _linear_scale(rsi, 55, 70, 4, 6)   # Ideal zone
+    else:
+        rsi_score = _linear_scale(rsi, 70, 85, 6, 2)   # Overbought decay
+    breakdown["rsi_zone"] = _clamp(rsi_score, 0, 6)
+
+    # ── MACD Signal (0–5) ────────────────────────────────────────
+    # Positive histogram = bullish, stronger histogram = stronger signal
+    # Also reward when MACD > Signal (bullish crossover zone)
+    macd_score = 0.0
+    if macd_hist > 0:
+        # Scale histogram strength (normalize loosely)
+        macd_score += _sigmoid_scale(macd_hist, 0.05, 30, 3)
+    if macd > macd_signal:
+        macd_score += 2.0
+    breakdown["macd_signal"] = _clamp(macd_score, 0, 5)
+
+    # ── Close Near High (0–4) ────────────────────────────────────
+    # close_near_high: 0 = closed at high (best), 1 = closed at low (worst)
+    cnh_score = _linear_scale(close_near_h, 0.5, 0.0, 0, 4)  # inverted
+    breakdown["close_near_high"] = _clamp(cnh_score, 0, 4)
+
+    raw   = sum(breakdown.values())
+    final = _clamp(raw, 0, MAX)
+    return {"score": round(final, 2), "max": MAX, "breakdown": breakdown}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. RELATIVE STRENGTH  (max 10)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def score_relative_strength(latest: dict) -> dict:
+    """
+    Sub-components:
+      - RS vs Nifty           (0–7):  stock return / nifty return ratio
+      - Distance from EMA20   (0–3):  reward pullbacks to EMA for entries
+    """
+    MAX = 10
+
+    rs             = _safe(latest.get("RELATIVE_STRENGTH"), 1.0)
+    dist_ema20     = _safe(latest.get("DISTANCE_FROM_EMA20"))  # % above/below EMA20
+
+    breakdown = {}
+
+    # ── RS vs Nifty (0–7) ────────────────────────────────────────
+    # RS > 1.0 = outperforming Nifty
+    # RS 1.0   = in-line, RS < 1.0 = underperforming
+    rs_score = _sigmoid_scale(rs, 1.05, 12, 7)
+    breakdown["rs_vs_nifty"] = _clamp(rs_score, 0, 7)
+
+    # ── Distance from EMA20 (0–3) ────────────────────────────────
+    # Best swing entry: price pulled back near EMA20 (dist ~0 to +3%)
+    # Too far above = chasing, below = weak
+    if dist_ema20 < -5:
+        dist_score = 0.0                                         # Below EMA20: weak
+    elif dist_ema20 <= 0:
+        dist_score = _linear_scale(dist_ema20, -5, 0, 0.5, 2)  # Slight pullback
+    elif dist_ema20 <= 3:
+        dist_score = _linear_scale(dist_ema20, 0, 3, 2, 3)     # Just above EMA20: ideal
+    else:
+        dist_score = _linear_scale(dist_ema20, 3, 10, 3, 0.5)  # Stretched above
+    breakdown["distance_from_ema20"] = _clamp(dist_score, 0, 3)
+
+    raw   = sum(breakdown.values())
+    final = _clamp(raw, 0, MAX)
+    return {"score": round(final, 2), "max": MAX, "breakdown": breakdown}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. STRUCTURE  (max 5)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def score_structure(latest: dict) -> dict:
+    """
+    Sub-components:
+      - Bullish Structure     (0–3):  higher highs + higher lows
+      - Trend Alignment       (0–2):  EMA20 > EMA50 > EMA200
+    """
+    MAX = 5
+
+    bullish_structure = bool(latest.get("BULLISH_STRUCTURE", False))
+    trend_alignment   = bool(latest.get("TREND_ALIGNMENT", False))
+
+    # Use HIGHER_HIGH and HIGHER_LOW individually for partial credit
+    higher_high = bool(latest.get("HIGHER_HIGH", False))
+    higher_low  = bool(latest.get("HIGHER_LOW", False))
+
+    breakdown = {}
+
+    # ── Bullish Structure (0–3) ──────────────────────────────────
+    struct_score = 0.0
+    if higher_high:
+        struct_score += 1.5
+    if higher_low:
+        struct_score += 1.5
+    breakdown["bullish_structure"] = _clamp(struct_score, 0, 3)
+
+    # ── Trend Alignment (0–2) ────────────────────────────────────
+    breakdown["trend_alignment"] = 2.0 if trend_alignment else 0.0
+
+    raw   = sum(breakdown.values())
+    final = _clamp(raw, 0, MAX)
+    return {"score": round(final, 2), "max": MAX, "breakdown": breakdown}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. VOLATILITY  (max 5)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def score_volatility(latest: dict) -> dict:
+    """
+    Swing trading wants moderate ATR — not too quiet (no movement),
+    not too wild (uncontrollable risk).
+
+    Sub-components:
+      - ATR % Sweet Spot      (0–3):  ideal ATR range for swing trades
+      - Range Compression     (0–2):  tight 20-day range = coiled spring
+    """
+    MAX = 5
+
+    atr_pct      = _safe(latest.get("ATR_PERCENT"))    # ATR as % of price
+    range_pct    = _safe(latest.get("RANGE_PERCENT"))  # 20-day H-L as % of low
+
+    breakdown = {}
+
+    # ── ATR % Sweet Spot (0–3) ───────────────────────────────────
+    # Ideal swing ATR: 1.5% – 4% of price
+    # Too low (<0.8%): dead stock, Too high (>6%): too risky
+    if atr_pct < 0.8:
+        atr_score = _linear_scale(atr_pct, 0, 0.8, 0, 0.5)
+    elif atr_pct <= 1.5:
+        atr_score = _linear_scale(atr_pct, 0.8, 1.5, 0.5, 1.5)
+    elif atr_pct <= 4.0:
+        atr_score = _linear_scale(atr_pct, 1.5, 4.0, 1.5, 3.0)  # Sweet spot
+    else:
+        atr_score = _linear_scale(atr_pct, 4.0, 8.0, 3.0, 0.5)  # Too volatile
+    breakdown["atr_sweet_spot"] = _clamp(atr_score, 0, 3)
+
+    # ── Range Compression (0–2) ──────────────────────────────────
+    # Tighter 20-day range = stock is coiling = potential energy for breakout
+    # range_pct < 8%: very tight (good), > 20%: wide & choppy (bad)
+    compression_score = _linear_scale(range_pct, 20, 5, 0, 2)
+    breakdown["range_compression"] = _clamp(compression_score, 0, 2)
+
+    raw   = sum(breakdown.values())
+    final = _clamp(raw, 0, MAX)
+    return {"score": round(final, 2), "max": MAX, "breakdown": breakdown}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8. MARKET TREND  (max 5)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def score_market_trend(latest: dict) -> dict:
+    """
+    Sub-components:
+      - Market Bullish        (0–3):  Nifty above EMA20, EMA20 > EMA50
+      - RS in Bull Market     (0–2):  extra credit if stock is RS > 1 in bull mkt
+    """
+    MAX = 5
+
+    market_bullish = bool(latest.get("MARKET_BULLISH", False))
+    rs             = _safe(latest.get("RELATIVE_STRENGTH"), 1.0)
+
+    breakdown = {}
+
+    # ── Market Bullish (0–3) ─────────────────────────────────────
+    breakdown["market_bullish"] = 3.0 if market_bullish else 0.0
+
+    # ── RS in Bull Market (0–2) ──────────────────────────────────
+    # Only reward RS leadership when market itself is bullish
+    if market_bullish and rs > 1.0:
+        rs_bull_score = _linear_scale(rs, 1.0, 1.3, 0, 2)
+    else:
+        rs_bull_score = 0.0
+    breakdown["rs_in_bull_market"] = _clamp(rs_bull_score, 0, 2)
+
+    raw   = sum(breakdown.values())
+    final = _clamp(raw, 0, MAX)
+    return {"score": round(final, 2), "max": MAX, "breakdown": breakdown}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MASTER SCORER
+# ─────────────────────────────────────────────────────────────────────────────
+
+SIGNAL_THRESHOLDS = {
+    "STRONG BUY":  80,
+    "BUY":         65,
+    "WEAK BUY":    50,
+    "NEUTRAL":     35,
+    "AVOID":        0,
 }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# DATA CONTAINERS
-# ─────────────────────────────────────────────────────────────────────────────
-
-@dataclass
-class RankingResult:
-    """Immutable result for a single ranked symbol."""
-    symbol:           str
-    score:            float
-    signal:           str
-    signal_rank:      int
-    component_scores: dict[str, float]
-    component_pct:    dict[str, float]
-    latest_price:     float
-    rsi:              float
-    volume_ratio:     float
-    atr_percent:      float
-    breakout:         bool
-    market_bullish:   bool
-    trend_alignment:  bool
-    ranked_at:        datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-
-    def to_dict(self) -> dict[str, Any]:
-        d = asdict(self)
-        d["ranked_at"] = self.ranked_at.isoformat()
-        return d
-
-    @property
-    def is_actionable(self) -> bool:
-        """True if signal is WEAK BUY or better."""
-        return self.signal_rank >= SIGNAL_RANK["WEAK BUY"]
+def get_signal(total_score: float) -> str:
+    for label, threshold in SIGNAL_THRESHOLDS.items():
+        if total_score >= threshold:
+            return label
+    return "AVOID"
 
 
-@dataclass
-class SymbolError:
-    """Captures exactly what went wrong per symbol — never swallowed silently."""
-    symbol:    str
-    stage:     str           # "fetch" | "indicators" | "scoring"
-    reason:    str
-    exc_type:  str
-
-
-@dataclass
-class RankingReport:
-    """Complete output from one ranking run."""
-    ranked:       list[RankingResult]
-    errors:       list[SymbolError]
-    total_input:  int
-    total_scored: int
-    total_failed: int
-    duration_sec: float
-    generated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-
-    # ── Convenience slices ───────────────────────────────────────
-    def top(self, n: int = 10) -> list[RankingResult]:
-        return self.ranked[:n]
-
-    def actionable(self) -> list[RankingResult]:
-        """All symbols with WEAK BUY or better signal."""
-        return [r for r in self.ranked if r.is_actionable]
-
-    def by_signal(self, signal: str) -> list[RankingResult]:
-        return [r for r in self.ranked if r.signal == signal]
-
-    def summary(self) -> dict[str, Any]:
-        signal_dist: dict[str, int] = {}
-        for r in self.ranked:
-            signal_dist[r.signal] = signal_dist.get(r.signal, 0) + 1
-        return {
-            "total_input":   self.total_input,
-            "total_scored":  self.total_scored,
-            "total_failed":  self.total_failed,
-            "success_rate":  f"{(self.total_scored / max(self.total_input, 1)) * 100:.1f}%",
-            "duration_sec":  round(self.duration_sec, 2),
-            "signal_distribution": signal_dist,
-            "top_3": [
-                {"symbol": r.symbol, "score": r.score, "signal": r.signal}
-                for r in self.ranked[:3]
-            ],
-        }
-
-    def to_dataframe(self) -> pd.DataFrame:
-        """Convert ranked list to a clean DataFrame for downstream use."""
-        if not self.ranked:
-            return pd.DataFrame()
-        rows = []
-        for r in self.ranked:
-            row = {
-                "symbol":        r.symbol,
-                "score":         r.score,
-                "signal":        r.signal,
-                "price":         r.latest_price,
-                "rsi":           r.rsi,
-                "volume_ratio":  r.volume_ratio,
-                "atr_pct":       r.atr_percent,
-                "breakout":      r.breakout,
-                "market_bullish": r.market_bullish,
-            }
-            row.update({f"cmp_{k}": v for k, v in r.component_scores.items()})
-            rows.append(row)
-        return pd.DataFrame(rows)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# DATABASE LAYER
-# ─────────────────────────────────────────────────────────────────────────────
-
-class CandleRepository:
+def score_stock(latest: dict, df = None, market_bullish = None) -> dict:
     """
-    Thin repository — owns all SQL so the engine stays SQL-free.
+    Master function — pass in the latest row of your indicators DataFrame.
+    Returns full score breakdown + signal.
 
-    Why a separate class?
-      If you swap PostgreSQL for ClickHouse or a Parquet cache later,
-      you touch only this class, not the engine logic.
-    """
-
-    # ── Fetch active symbols ─────────────────────────────────────
-    ACTIVE_SYMBOLS_SQL = """
-        SELECT symbol
-        FROM   stocks
-        WHERE  is_active = TRUE
-        ORDER  BY symbol;
-    """
-
-    # ── Fetch recent candles (parameterised) ─────────────────────
-    # Using a CTE with ROW_NUMBER lets PostgreSQL pick the latest N
-    # rows cheaply via the (symbol, time DESC) index without a full scan.
-    CANDLES_SQL = """
-        WITH ranked AS (
-            SELECT
-                time,
-                open,
-                high,
-                low,
-                close,
-                volume,
-                ROW_NUMBER() OVER (
-                    PARTITION BY symbol
-                    ORDER BY time DESC
-                ) AS rn
-            FROM   candles
-            WHERE  symbol = %(symbol)s
-        )
-        SELECT time, open, high, low, close, volume
-        FROM   ranked
-        WHERE  rn <= %(limit)s
-        ORDER  BY time ASC;
-    """
-
-    def __init__(self, db_conn_factory):
-        """
-        db_conn_factory: callable → psycopg2 / SQLAlchemy connection
-        Keeping it as a factory means each call gets a fresh connection
-        from the pool — safe for concurrent threads.
-        """
-        self._conn_factory = db_conn_factory
-
-    def get_active_symbols(self) -> list[str]:
-        conn = self._conn_factory()
-        try:
-            with conn.cursor() as cur:
-                cur.execute(self.ACTIVE_SYMBOLS_SQL)
-                rows = cur.fetchall()
-            return [row[0] for row in rows]
-        finally:
-            conn.close()
-
-    def get_candles(self, symbol: str, limit: int = PREFERRED_CANDLES) -> pd.DataFrame:
-        """
-        Returns a DataFrame with columns:
-          time, open, high, low, close, volume
-        Sorted ascending by time.
-        Returns empty DataFrame on any DB error.
-        """
-        conn = self._conn_factory()
-        try:
-            df = pd.read_sql(
-                self.CANDLES_SQL,
-                conn,
-                params={"symbol": symbol, "limit": limit},
-                parse_dates=["time"],
-            )
-            if df.empty:
-                return df
-
-            df = df.sort_values("time").reset_index(drop=True)
-            df["time"] = pd.to_datetime(df["time"]).dt.tz_localize(None)
-            df = df.set_index("time")
-            return df
-        finally:
-            conn.close()
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# PER-SYMBOL PROCESSOR
-# ─────────────────────────────────────────────────────────────────────────────
-
-class _SymbolProcessor:
-    """
-    Encapsulates the full pipeline for one symbol.
-    Designed to run inside a thread — holds no shared mutable state.
-
-    Pipeline stages:
-      1. fetch     → raw OHLCV DataFrame
-      2. validate  → enough rows, no NaN close prices
-      3. indicators → calculate_indicators() + add_volume_trend()
-      4. score     → score_stock() on latest row
-      5. pack      → RankingResult dataclass
-    """
-
-    def __init__(self, repo: CandleRepository, candle_limit: int = PREFERRED_CANDLES):
-        self._repo  = repo
-        self._limit = candle_limit
-
-    def process(self, symbol: str) -> RankingResult:
-        """
-        Run the full pipeline. Raises descriptive exceptions so the
-        caller can tag them with the correct stage.
-        """
-        # Stage 1 — Fetch
-        df = self._fetch(symbol)
-
-        # Stage 2 — Validate
-        self._validate(symbol, df)
-
-        # Stage 3 — Indicators
-        df = self._indicators(symbol, df)
-
-        # Stage 4 — Score
-        result = self._score(symbol, df)
-
-        return result
-
-    # ── Private stage methods ────────────────────────────────────
-
-    def _fetch(self, symbol: str) -> pd.DataFrame:
-        df = self._repo.get_candles(symbol, self._limit)
-        if df is None or df.empty:
-            raise ValueError(f"No candle data returned from database")
-        return df
-
-    def _validate(self, symbol: str, df: pd.DataFrame) -> None:
-        if len(df) < MIN_CANDLES_REQUIRED:
-            raise ValueError(
-                f"Insufficient candles: got {len(df)}, need {MIN_CANDLES_REQUIRED}"
-            )
-        required_cols = {"open", "high", "low", "close", "volume"}
-        missing = required_cols - set(df.columns)
-        if missing:
-            raise ValueError(f"Missing OHLCV columns: {missing}")
-
-        null_close = df["close"].isna().sum()
-        if null_close > len(df) * 0.05:   # >5% nulls = bad data
-            raise ValueError(f"Too many null close prices: {null_close}")
-
-        # Forward-fill minor gaps (weekend carry-overs, halts)
-        df.ffill(inplace=True)
-
-    def _indicators(self, symbol: str, df: pd.DataFrame) -> pd.DataFrame:
-        df = calculate_indicators(df)
-        df = add_volume_trend(df)
-
-        # Verify core indicators were actually populated
-        critical = ["RSI", "EMA20", "EMA50", "EMA200", "ATR", "MACD"]
-        for col in critical:
-            if col not in df.columns:
-                raise ValueError(f"Indicator '{col}' missing after calculation")
-            if df[col].isna().all():
-                raise ValueError(f"Indicator '{col}' is entirely NaN")
-        return df
-
-    def _score(self, symbol: str, df: pd.DataFrame) -> RankingResult:
+    Usage:
         latest = df.iloc[-1].to_dict()
-
-        # Guard: NaN close means last candle is corrupt
-        if math.isnan(latest.get("close", float("nan"))):
-            raise ValueError("Last candle has NaN close price")
-
         result = score_stock(latest)
+        print(result["signal"], result["total_score"])
+    """
+    components = {
+        "trend":             score_trend(latest),
+        "breakout":          score_breakout(latest),
+        "volume":            score_volume(latest),
+        "momentum":          score_momentum(latest),
+        "relative_strength": score_relative_strength(latest),
+        "structure":         score_structure(latest),
+        "volatility":        score_volatility(latest),
+        "market_trend":      score_market_trend(latest),
+    }
 
-        component_scores = {
-            name: comp["score"]
-            for name, comp in result["components"].items()
-        }
+    total_score = sum(c["score"] for c in components.values())
+    total_max   = sum(c["max"]   for c in components.values())  # should be 100
 
-        return RankingResult(
-            symbol           = symbol,
-            score            = result["total_score"],
-            signal           = result["signal"],
-            signal_rank      = SIGNAL_RANK.get(result["signal"], 0),
-            component_scores = component_scores,
-            component_pct    = result["component_pct"],
-            latest_price     = float(latest.get("close", 0)),
-            rsi              = float(latest.get("RSI", 0) or 0),
-            volume_ratio     = float(latest.get("VOLUME_RATIO", 1) or 1),
-            atr_percent      = float(latest.get("ATR_PERCENT", 0) or 0),
-            breakout         = bool(latest.get("BREAKOUT", False)),
-            market_bullish   = bool(latest.get("MARKET_BULLISH", False)),
-            trend_alignment  = bool(latest.get("TREND_ALIGNMENT", False)),
-        )
+    signal = get_signal(total_score)
+
+    # Per-component score percentage (for UI display)
+    component_pct = {
+        name: round((c["score"] / c["max"]) * 100, 1) if c["max"] > 0 else 0.0
+        for name, c in components.items()
+    }
+
+    result = {
+        "total_score":   round(total_score, 2),
+        "total_max":     total_max,
+        "signal":        signal,
+        "components":    components,
+        "component_pct": component_pct,
+    }
+
+    logger.info(
+        f"[SCORE] {signal} | Total: {total_score:.1f}/{total_max} | "
+        + " | ".join(f"{k}: {v['score']:.1f}" for k, v in components.items())
+    )
+
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# RANKING ENGINE  (main orchestrator)
+# VOLUME TREND HELPER  (call before score_stock)
 # ─────────────────────────────────────────────────────────────────────────────
 
-class RankingEngine:
+def add_volume_trend(df):
     """
-    Orchestrates parallel processing of all active symbols and
-    returns a fully ranked RankingReport.
-
-    Thread safety
-    -------------
-    Each symbol is processed in its own thread via ThreadPoolExecutor.
-    The DB connection factory is called per-thread, so no connection
-    is shared across threads — fully safe.
-
-    Why ThreadPoolExecutor and not ProcessPool?
-    -------------------------------------------
-    The bottleneck is DB I/O, not CPU. Threads share memory and avoid
-    the serialization overhead of multiprocessing. For CPU-bound TA-Lib
-    calculations on 500+ stocks, switch to ProcessPoolExecutor.
+    Compute VOLUME_TREND column = rolling change in volume ratio.
+    Call this once after calculate_indicators(), before scoring.
     """
-
-    def __init__(
-        self,
-        db_conn_factory,
-        candle_limit: int  = PREFERRED_CANDLES,
-        max_workers:  int  = DEFAULT_WORKERS,
-    ):
-        self._repo      = CandleRepository(db_conn_factory)
-        self._processor = _SymbolProcessor(self._repo, candle_limit)
-        self._workers   = max_workers
-
-    # ── Public API ───────────────────────────────────────────────
-
-    def run(self, symbols: Optional[list[str]] = None) -> RankingReport:
-        """
-        Full ranking run.
-        Pass symbols=None to rank all active stocks from DB.
-        Pass a list to rank a specific subset (useful for watchlists).
-        """
-        t_start = time.perf_counter()
-
-        if symbols is None:
-            logger.info("Fetching active symbols from database...")
-            symbols = self._repo.get_active_symbols()
-
-        logger.info(f"Starting ranking run for {len(symbols)} symbols "
-                    f"with {self._workers} workers")
-
-        ranked, errors = self._run_parallel(symbols)
-
-        # Sort: primary = score DESC, secondary = signal_rank DESC, tertiary = symbol ASC
-        ranked.sort(
-            key=lambda r: (-r.score, -r.signal_rank, r.symbol)
-        )
-
-        duration = time.perf_counter() - t_start
-
-        report = RankingReport(
-            ranked       = ranked,
-            errors       = errors,
-            total_input  = len(symbols),
-            total_scored = len(ranked),
-            total_failed = len(errors),
-            duration_sec = duration,
-        )
-
-        self._log_report_summary(report)
-        return report
-
-    def get_top_ranked_stocks(self, limit: int = 10) -> list[dict[str, Any]]:
-        """
-        Convenience wrapper — runs full pipeline, returns top N as dicts.
-        Suitable for direct API response serialization.
-        """
-        report = self.run()
-        return [r.to_dict() for r in report.top(limit)]
-
-    # ── Internal ─────────────────────────────────────────────────
-
-    def _run_parallel(
-        self, symbols: list[str]
-    ) -> tuple[list[RankingResult], list[SymbolError]]:
-
-        ranked: list[RankingResult] = []
-        errors: list[SymbolError]   = []
-
-        with ThreadPoolExecutor(max_workers=self._workers) as pool:
-            future_map = {
-                pool.submit(self._safe_process, sym): sym
-                for sym in symbols
-            }
-
-            for future in as_completed(future_map):
-                symbol = future_map[future]
-                try:
-                    outcome = future.result()
-                    if isinstance(outcome, RankingResult):
-                        ranked.append(outcome)
-                    else:
-                        errors.append(outcome)   # SymbolError
-                except Exception as exc:
-                    # Absolute last-resort catch — future.result() itself failed
-                    errors.append(SymbolError(
-                        symbol   = symbol,
-                        stage    = "unknown",
-                        reason   = str(exc),
-                        exc_type = type(exc).__name__,
-                    ))
-                    logger.exception(f"[{symbol}] Unexpected future error")
-
-        return ranked, errors
-
-    def _safe_process(self, symbol: str) -> RankingResult | SymbolError:
-        """
-        Wraps _SymbolProcessor.process() with per-stage error attribution.
-        Returns either a RankingResult or a SymbolError — never raises.
-        """
-        t0 = time.perf_counter()
-        stage = "init"
-        try:
-            stage = "fetch"
-            df = self._processor._fetch(symbol)
-
-            stage = "validate"
-            self._processor._validate(symbol, df)
-
-            stage = "indicators"
-            df = self._processor._indicators(symbol, df)
-
-            stage = "scoring"
-            result = self._processor._score(symbol, df)
-
-            elapsed = (time.perf_counter() - t0) * 1000
-            logger.debug(f"[{symbol}] ✓ score={result.score:.1f} "
-                         f"signal={result.signal} ({elapsed:.0f}ms)")
-            return result
-
-        except Exception as exc:
-            elapsed = (time.perf_counter() - t0) * 1000
-            logger.warning(f"[{symbol}] ✗ stage={stage} "
-                           f"error={type(exc).__name__}: {exc} ({elapsed:.0f}ms)")
-            return SymbolError(
-                symbol   = symbol,
-                stage    = stage,
-                reason   = str(exc),
-                exc_type = type(exc).__name__,
-            )
-
-    @staticmethod
-    def _log_report_summary(report: RankingReport) -> None:
-        summary = report.summary()
-        logger.info(
-            f"Ranking complete | "
-            f"scored={report.total_scored}/{report.total_input} | "
-            f"failed={report.total_failed} | "
-            f"duration={report.duration_sec:.2f}s | "
-            f"signals={summary['signal_distribution']}"
-        )
-        if report.ranked:
-            logger.info(
-                "Top 3: " + " | ".join(
-                    f"{r.symbol} {r.score:.1f} ({r.signal})"
-                    for r in report.ranked[:3]
-                )
-            )
-        if report.errors:
-            stage_counts: dict[str, int] = {}
-            for e in report.errors:
-                stage_counts[e.stage] = stage_counts.get(e.stage, 0) + 1
-            logger.warning(f"Failure breakdown by stage: {stage_counts}")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# CONVENIENCE FUNCTIONS  (for direct import / FastAPI router use)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def get_top_ranked_stocks(
-    db_conn_factory,
-    limit:        int = 10,
-    max_workers:  int = DEFAULT_WORKERS,
-) -> list[dict[str, Any]]:
-    """
-    One-liner entry point.
-
-    Usage (FastAPI example):
-        @router.get("/top-stocks")
-        def top_stocks():
-            return get_top_ranked_stocks(get_db_connection, limit=10)
-    """
-    engine = RankingEngine(db_conn_factory, max_workers=max_workers)
-    return engine.get_top_ranked_stocks(limit=limit)
-
-
-def run_full_ranking(
-    db_conn_factory,
-    symbols:      Optional[list[str]] = None,
-    max_workers:  int = DEFAULT_WORKERS,
-) -> RankingReport:
-    """
-    Run a full ranking and return the complete RankingReport.
-    Useful for scheduled jobs, backtesting, or admin endpoints.
-    """
-    engine = RankingEngine(db_conn_factory, max_workers=max_workers)
-    return engine.run(symbols=symbols)
+    df["VOLUME_TREND"] = df["VOLUME_RATIO"].diff(3).fillna(0)
+    return df
