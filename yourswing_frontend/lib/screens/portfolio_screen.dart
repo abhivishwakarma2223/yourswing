@@ -17,7 +17,7 @@ class PortfolioScreen extends StatefulWidget {
 class _PortfolioScreenState extends State<PortfolioScreen> {
   final PortfolioService _portfolioService = PortfolioService();
   List<PortfolioItem> _holdings = [];
-  Map<String, double> _livePrices = {};
+  Map<String, Map<String, double>> _liveData = {};
   bool _isLoading = true;
 
   @override
@@ -33,10 +33,10 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
     final data = await _portfolioService.getPortfolio();
     _holdings = data;
     
-    // 2. Fetch live prices for all holdings
+    // 2. Fetch live prices and changes for all holdings
     if (_holdings.isNotEmpty) {
       final symbols = _holdings.map((e) => e.symbol).toList();
-      _livePrices = await apiService.fetchLatestPrices(symbols);
+      _liveData = await apiService.fetchLatestPrices(symbols);
     }
     
     setState(() => _isLoading = false);
@@ -103,9 +103,12 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
                 onPressed: () async {
                   if (symbolController.text.isEmpty || qtyController.text.isEmpty || priceController.text.isEmpty) return;
                   
+                  String symbol = symbolController.text.trim().toUpperCase();
+                  if (!symbol.contains('.')) symbol = '$symbol.NS';
+
                   final newItem = PortfolioItem(
-                    symbol: symbolController.text.toUpperCase(),
-                    name: symbolController.text.toUpperCase(),
+                    symbol: symbol,
+                    name: symbol,
                     quantity: double.tryParse(qtyController.text) ?? 0,
                     averagePrice: double.tryParse(priceController.text) ?? 0,
                   );
@@ -211,9 +214,25 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
   }
 
   Widget _buildHoldingTile(PortfolioItem item) {
-    double currentPrice = _livePrices[item.symbol] ?? item.averagePrice;
+    String symbol = item.symbol;
+    if (!symbol.contains('.')) symbol = '$symbol.NS';
+    
+    final stockData = _liveData[symbol];
+    double currentPrice = item.averagePrice;
+    double dailyChange = 0.0;
+    
+    if (stockData != null && (stockData['price'] ?? 0) > 0) {
+      currentPrice = stockData['price']!;
+      dailyChange = stockData['changePercent'] ?? 0.0;
+    }
+    
     double pnl = (currentPrice - item.averagePrice) * item.quantity;
+    double pnlPercent = item.averagePrice > 0 
+        ? ((currentPrice - item.averagePrice) / item.averagePrice) * 100 
+        : 0.0;
+        
     bool isProfit = pnl >= 0;
+    bool isDailyUp = dailyChange >= 0;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
@@ -257,12 +276,34 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              Text(
-                '₹${currentPrice.toStringAsFixed(2)}',
-                style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+              Row(
+                children: [
+                  if (dailyChange != 0)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    margin: const EdgeInsets.only(right: 8),
+                    decoration: BoxDecoration(
+                      color: (isDailyUp ? AppTheme.signalBuy : AppTheme.signalAvoid).withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      '${isDailyUp ? '+' : ''}${dailyChange.toStringAsFixed(1)}%',
+                      style: TextStyle(
+                        color: isDailyUp ? AppTheme.signalBuy : AppTheme.signalAvoid,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  Text(
+                    '₹${currentPrice.toStringAsFixed(2)}',
+                    style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                  ),
+                ],
               ),
+              const SizedBox(height: 4),
               Text(
-                '${isProfit ? '+' : ''}₹${pnl.toStringAsFixed(2)}',
+                '${isProfit ? '+' : ''}₹${pnl.toStringAsFixed(2)} (${pnlPercent.toStringAsFixed(1)}%)',
                 style: GoogleFonts.outfit(
                   color: isProfit ? AppTheme.signalBuy : AppTheme.signalAvoid,
                   fontSize: 12,

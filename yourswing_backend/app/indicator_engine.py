@@ -1,5 +1,5 @@
-import talib
 import pandas as pd
+import pandas_ta as ta
 import logging
 import yfinance as yf
 import time
@@ -37,8 +37,9 @@ def get_nifty_data():
         # Ensure the index is purely dates for easier mapping
         nifty_df.index = nifty_df.index.date
 
-        nifty_df["EMA20"] = talib.EMA(nifty_df["close"].values, timeperiod=20)
-        nifty_df["EMA50"] = talib.EMA(nifty_df["close"].values, timeperiod=50)
+        # Use pandas_ta instead of talib
+        nifty_df["EMA20"] = ta.ema(nifty_df["close"], length=20)
+        nifty_df["EMA50"] = ta.ema(nifty_df["close"], length=50)
 
         nifty_df["MARKET_BULLISH"] = (
             (nifty_df["close"] > nifty_df["EMA20"]) &
@@ -60,34 +61,31 @@ def calculate_indicators(df):
     if df.empty:
         return df
 
-    close  = df["close"].values
-    high   = df["high"].values
-    low    = df["low"].values
-    volume = df["volume"]  # keep as Series for rolling
-
-    # ── Core Indicators ──────────────────────────────────────────
-    df["RSI"]    = talib.RSI(close, timeperiod=14)
-    df["EMA20"]  = talib.EMA(close, timeperiod=20)
-    df["EMA50"]  = talib.EMA(close, timeperiod=50)
-    df["EMA200"] = talib.EMA(close, timeperiod=200)
+    # Ensure column names are what pandas_ta expects or map them
+    # pandas_ta works best with columns named 'open', 'high', 'low', 'close', 'volume'
+    
+    # ── Core Indicators (using pandas_ta) ────────────────────────
+    df["RSI"]    = ta.rsi(df["close"], length=14)
+    df["EMA20"]  = ta.ema(df["close"], length=20)
+    df["EMA50"]  = ta.ema(df["close"], length=50)
+    df["EMA200"] = ta.ema(df["close"], length=200)
 
     # MACD
-    macd, macd_signal, macd_hist = talib.MACD(
-        close, fastperiod=12, slowperiod=26, signalperiod=9
-    )
-    df["MACD"]        = macd
-    df["MACD_SIGNAL"] = macd_signal
-    df["MACD_HIST"]   = macd_hist
+    macd_df = ta.macd(df["close"], fast=12, slow=26, signal=9)
+    if macd_df is not None:
+        df["MACD"]        = macd_df["MACD_12_26_9"]
+        df["MACD_SIGNAL"] = macd_df["MACDs_12_26_9"]
+        df["MACD_HIST"]   = macd_df["MACDh_12_26_9"]
 
     # ATR
-    df["ATR"]         = talib.ATR(high, low, close, timeperiod=14)
+    df["ATR"]         = ta.atr(df["high"], df["low"], df["close"], length=14)
     df["ATR_PERCENT"] = (df["ATR"] / df["close"].replace(0, np.nan)) * 100
 
     # ── Volume ───────────────────────────────────────────────────
-    df["AVG_VOLUME_20"] = volume.rolling(20).mean()
-    df["VOLUME_RATIO"]  = volume / df["AVG_VOLUME_20"].replace(0, np.nan)
+    df["AVG_VOLUME_20"] = df["volume"].rolling(20).mean()
+    df["VOLUME_RATIO"]  = df["volume"] / df["AVG_VOLUME_20"].replace(0, np.nan)
 
-    # ── Swing Structure (FIX: exclude current candle) ────────────
+    # ── Swing Structure ──────────────────────────────────────────
     df["PREV_SWING_HIGH"] = df["high"].shift(1).rolling(5).max()
     df["PREV_SWING_LOW"]  = df["low"].shift(1).rolling(5).min()
     df["HIGHER_HIGH"]     = df["high"] > df["PREV_SWING_HIGH"]
@@ -107,7 +105,7 @@ def calculate_indicators(df):
     df["DISTANCE_FROM_EMA20"] = ((df["close"] - df["EMA20"]) / df["EMA20"]) * 100
     df["TREND_STRENGTH"]      = ((df["EMA20"] - df["EMA50"]) / df["EMA50"]) * 100
 
-    # ── 20-Day Range (FIX: use RANGE_LOW_20 as base) ─────────────
+    # ── 20-Day Range ─────────────────────────────────────────────
     df["RANGE_HIGH_20"] = df["high"].rolling(20).max()
     df["RANGE_LOW_20"]  = df["low"].rolling(20).min()
     df["RANGE_PERCENT"] = (
@@ -119,8 +117,6 @@ def calculate_indicators(df):
     nifty_df = get_nifty_data()
     if nifty_df is not None and not nifty_df.empty:
         stock_return = df["close"] / df["close"].shift(20)
-
-        # Ensure we map by date correctly without crashing if df doesn't have a DatetimeIndex
         df_dates = df["time"].apply(lambda d: d.date() if hasattr(d, 'date') else d)
         
         nifty_aligned = df_dates.map(nifty_df["close"])
@@ -128,14 +124,12 @@ def calculate_indicators(df):
         
         nifty_return = nifty_aligned / nifty_aligned.shift(20)
         df["RELATIVE_STRENGTH"] = stock_return / nifty_return.replace(0, np.nan)
-
-        # Carry market trend into stock df
         df["MARKET_BULLISH"] = df_dates.map(nifty_df["MARKET_BULLISH"]).ffill().fillna(False)
     else:
         df["RELATIVE_STRENGTH"] = 1.0
         df["MARKET_BULLISH"]    = False
 
-    # ── Breakout (FIX: exclude current candle from rolling high) ─
+    # ── Breakout ─────────────────────────────────────────────────
     df["HIGHEST_20"] = df["high"].shift(1).rolling(20).max()
     df["BREAKOUT"]   = (
         (df["close"] > df["HIGHEST_20"]) &

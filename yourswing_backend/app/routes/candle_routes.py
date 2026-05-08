@@ -1,118 +1,59 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
+import time
 from app.database import get_db
 from app import schemas, crud
 from app.models import Stock
-from app.market_api import fetch_daily_candles
-from app.strategy_engine import generate_signal
+from app.market_api import fetch_daily_candles, fetch_batch_prices
 
 router = APIRouter(tags=["candles"])
 
-@router.get("/candles", response_model=List[schemas.Candle])
-def read_candles(symbol: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    return crud.get_candles(db=db, symbol=symbol, skip=skip, limit=limit)
+# ── SIMPLE MEMORY CACHE FOR TRENDING STOCKS ──────────────────────
+TRENDING_CACHE = {
+    "data": None,
+    "expiry": 0
+}
+CACHE_DURATION = 600  # 10 Minutes in seconds
 
-@router.post("/candles", response_model=schemas.Candle)
-def create_candle(candle: schemas.CandleCreate, db: Session = Depends(get_db)):
-    return crud.create_candle(db=db, candle=candle)
-
-@router.get("/fetch/{symbol}")
-def fetch_stock(symbol: str):
-
-    data = fetch_daily_candles(symbol)
-
-    return {
-        "symbol": symbol,
-        "candles": data
-    }
-
-
-
-@router.get("/fetch-save/{symbol}")
-def fetch_and_save(symbol: str, db: Session = Depends(get_db)):
-
-    stock = db.query(Stock).filter(
-        Stock.symbol == symbol
-    ).first()
-
-    if not stock:
-
-        stock = Stock(
-            symbol=symbol,
-            company_name=symbol,
-            exchange="Yahoo"
-        )
-
-        db.add(stock)
-        db.commit()
-        db.refresh(stock)
-
-    candles = fetch_daily_candles(symbol)
-
-    count = crud.save_candles(db, stock.id, candles)
-
-    return {
-        "symbol": symbol,
-        "candles_saved": count
-    }
-
-
-
-
-@router.get("/api/trending")
+@router.get("/trending")
 def get_trending_stocks(db: Session = Depends(get_db)):
-    from concurrent.futures import ThreadPoolExecutor
-    from app.market_api import get_live_price
+    global TRENDING_CACHE
+    
+    # Check if cache is still valid
+    current_time = time.time()
+    if TRENDING_CACHE["data"] and current_time < TRENDING_CACHE["expiry"]:
+        print("Serving Trending Stocks from Cache...")
+        return TRENDING_CACHE["data"]
+
     from app.ranking_engine import get_top_ranked_stocks
     from app.database import get_db_connection
     import math
 
+    print("Cache expired. Recalculating Trending Stocks (this takes a few seconds)...")
+    
     # 1. Rank Stocks using the Ranking Engine
-    # get_top_ranked_stocks takes db_conn_factory and returns top 10 stocks.
     top_stocks = get_top_ranked_stocks(get_db_connection, limit=10)
-
     symbols_to_fetch = [s["symbol"] for s in top_stocks]
 
-    # 2. Fetch live prices concurrently without passing the DB session
-    live_prices = {}
-    if symbols_to_fetch:
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            # map returns results in the exact same order as symbols_to_fetch
-            results = executor.map(get_live_price, symbols_to_fetch)
-            for symbol, price_info in zip(symbols_to_fetch, results):
-                live_prices[symbol] = price_info
+    # 2. Fetch live prices in one bulk request (Hyper-speed)
+    live_data = fetch_batch_prices(symbols_to_fetch)
 
-    # 3. Combine ranking analysis with live price and calculate dynamic change percent
+    # 3. Combine ranking analysis with live data
     trending = []
     for stock_data in top_stocks:
         symbol = stock_data["symbol"]
         score = stock_data["score"]
         signal = stock_data["signal"]
         
-        price_info = live_prices.get(symbol, {"live_price": 0.0, "previous_close": 0.0})
+        price_info = live_data.get(symbol, {"price": 0.0, "changePercent": 0.0})
+        live_price = price_info["price"]
         
-        live_price = price_info["live_price"]
-        previous_close = price_info["previous_close"]
-        
-        if math.isnan(live_price):
-            live_price = 0.0
-        if math.isnan(previous_close):
-            previous_close = 0.0
+        # We need previous close for the backend logic (optional fallback)
+        previous_close = stock_data.get("latest_price") or live_price
             
-        # If Yahoo didn't provide a previous close, fallback to local DB latest close
-        if previous_close == 0.0:
-            previous_close = stock_data.get("latest_price") or 0.0
-                
-        # If Yahoo couldn't fetch live price, fallback to previous close
-        if live_price == 0.0 and previous_close > 0:
-            live_price = previous_close
-            
-        change = 0.0
-        change_percent = 0.0
-        if previous_close > 0:
-            change = round(live_price - previous_close, 2)
-            change_percent = round((change / previous_close) * 100, 2)
+        change = round(live_price - previous_close, 2)
+        change_percent = price_info["changePercent"]
             
         trending.append({
             "symbol": symbol.upper(),
@@ -122,13 +63,18 @@ def get_trending_stocks(db: Session = Depends(get_db)):
             "signal": signal,
             "score": score
         })
-        
+    
+    # Update cache
+    TRENDING_CACHE["data"] = trending
+    TRENDING_CACHE["expiry"] = current_time + CACHE_DURATION
+    
     return trending
-@router.get("/api/analysis/{symbol}")
+
+@router.get("/analysis/{symbol}")
 def get_stock_analysis(symbol: str, db: Session = Depends(get_db)):
     symbol = symbol.upper()
+    if "." not in symbol: symbol = f"{symbol}.NS"
     
-    # 1. Check if stock exists, if not create it
     stock = crud.get_stock_by_symbol(db, symbol)
     if not stock:
         stock = Stock(symbol=symbol, company_name=symbol, exchange="Yahoo")
@@ -136,7 +82,6 @@ def get_stock_analysis(symbol: str, db: Session = Depends(get_db)):
         db.commit()
         db.refresh(stock)
         
-    # 2. Fetch live data from Yahoo Finance
     try:
         candles_data = fetch_daily_candles(symbol)
         if candles_data:
@@ -144,12 +89,10 @@ def get_stock_analysis(symbol: str, db: Session = Depends(get_db)):
     except Exception as e:
         print(f"Error fetching from Yahoo: {e}")
         
-    # 3. Calculate dynamic indicators with live price overlay
     analysis = crud.analyze_stock_with_live_price(db, stock.id)
     if not analysis:
         raise HTTPException(status_code=404, detail="Not enough data to compute analysis")
     
-    # Format exactly as requested
     return {
         "symbol": analysis["symbol"],
         "price": analysis["live_price"],
@@ -167,14 +110,20 @@ def get_stock_analysis(symbol: str, db: Session = Depends(get_db)):
         "signal": analysis["signal"],
         "score": analysis.get("score", 0.0),
         "indicators": {
-            "RSI": {
-                "value": analysis["rsi"] if analysis["rsi"] else "N/A"
-            },
-            "EMA20": {
-                "value": analysis["ema20"] if analysis["ema20"] else "N/A"
-            },
-            "EMA50": {
-                "value": analysis["ema50"] if analysis["ema50"] else "N/A"
-            }
+            "RSI": {"value": analysis["rsi"] if analysis["rsi"] else "N/A"},
+            "EMA20": {"value": analysis["ema20"] if analysis["ema20"] else "N/A"},
+            "EMA50": {"value": analysis["ema50"] if analysis["ema50"] else "N/A"}
         }
     }
+
+@router.post("/prices/batch")
+def get_batch_prices(symbols: List[str]):
+    return fetch_batch_prices(symbols)
+
+@router.get("/candles", response_model=List[schemas.Candle])
+def read_candles(symbol: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    return crud.get_candles(db=db, symbol=symbol, skip=skip, limit=limit)
+
+@router.post("/candles", response_model=schemas.Candle)
+def create_candle(candle: schemas.CandleCreate, db: Session = Depends(get_db)):
+    return crud.create_candle(db=db, candle=candle)

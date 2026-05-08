@@ -4,11 +4,15 @@ import 'package:http/http.dart' as http;
 class ApiService {
   // Use 10.0.2.2 if testing on an Android Emulator
   // Use 127.0.0.1 or localhost if testing on Windows/Chrome
-  final String baseUrl = 'http://127.0.0.1:8001/api';
+  final String baseUrl = 'http://localhost:8001/api';
 
   Future<Map<String, dynamic>?> fetchStockAnalysis(String symbol) async {
+    // Normalize: ensure it's uppercase and has .NS if no suffix
+    String normalized = symbol.trim().toUpperCase();
+    if (!normalized.contains('.')) normalized = '$normalized.NS';
+    
     try {
-      final response = await http.get(Uri.parse('$baseUrl/analysis/$symbol'));
+      final response = await http.get(Uri.parse('$baseUrl/analysis/$normalized'));
       
       if (response.statusCode == 200) {
         return json.decode(response.body);
@@ -35,24 +39,36 @@ class ApiService {
     }
   }
 
-  // Fetch multiple prices in parallel
-  Future<Map<String, double>> fetchLatestPrices(List<String> symbols) async {
-    Map<String, double> prices = {};
+  // Fetch multiple prices and changes in parallel
+  Future<Map<String, Map<String, double>>> fetchLatestPrices(List<String> symbols) async {
+    if (symbols.isEmpty) return {};
+    
     try {
-      // Run all requests at the same time for speed
-      final results = await Future.wait(
-        symbols.map((s) => fetchStockAnalysis(s))
+      final response = await http.post(
+        Uri.parse('$baseUrl/prices/batch'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode(symbols),
       );
       
-      for (int i = 0; i < symbols.length; i++) {
-        if (results[i] != null) {
-          prices[symbols[i]] = (results[i]!['price'] ?? 0.0).toDouble();
-        }
+      if (response.statusCode == 200) {
+        final Map<String, dynamic> data = json.decode(response.body);
+        Map<String, Map<String, double>> results = {};
+        data.forEach((key, value) {
+          if (value != null && value is Map) {
+            results[key] = {
+              'price': (value['price'] ?? 0.0).toDouble(),
+              'changePercent': (value['changePercent'] ?? 0.0).toDouble(),
+            };
+          } else {
+            results[key] = {'price': 0.0, 'changePercent': 0.0};
+          }
+        });
+        return results;
       }
     } catch (e) {
-      print('Error fetching multiple prices: $e');
+      print('Error fetching batch prices: $e');
     }
-    return prices;
+    return {};
   }
 }
 

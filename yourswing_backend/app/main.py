@@ -65,7 +65,7 @@ app.add_middleware(
 
 Base.metadata.create_all(bind=engine)
 
-app.include_router(candle_routes.router)
+app.include_router(candle_routes.router, prefix="/api")
 
 @app.get("/")
 def read_root():

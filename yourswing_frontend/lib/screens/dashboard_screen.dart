@@ -21,7 +21,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   final PortfolioService _portfolioService = PortfolioService();
   List<Map<String, dynamic>> trending = [];
   List<PortfolioItem> _holdings = [];
-  Map<String, double> _livePrices = {};
+  Map<String, Map<String, double>> _livePrices = {};
   bool _isLoading = true;
 
   @override
@@ -40,7 +40,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final holdingsData = await _portfolioService.getPortfolio();
     
     // 3. Fetch Live Prices for Holdings
-    Map<String, double> prices = {};
+    Map<String, Map<String, double>> prices = {};
     if (holdingsData.isNotEmpty) {
       final symbols = holdingsData.map((e) => e.symbol).toList();
       prices = await apiService.fetchLatestPrices(symbols);
@@ -58,7 +58,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
     double totalValue = 0;
     double totalInvestment = 0;
     for (var item in _holdings) {
-      double currentPrice = _livePrices[item.symbol] ?? item.averagePrice;
+      String symbol = item.symbol;
+      if (!symbol.contains('.')) symbol = '$symbol.NS';
+      
+      final stockData = _livePrices[symbol];
+      double currentPrice = item.averagePrice;
+      
+      if (stockData != null && (stockData['price'] ?? 0) > 0) {
+        currentPrice = stockData['price']!;
+      }
+      
       totalValue += currentPrice * item.quantity;
       totalInvestment += item.averagePrice * item.quantity;
     }
@@ -341,9 +350,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   style: GoogleFonts.outfit(fontWeight: FontWeight.w600, fontSize: 16, color: Colors.white),
                 ),
                 Text(
-                  '${changePercent > 0 ? '+' : ''}$changePercent%',
+                  '${changePercent > 0 ? '+' : ''}₹${(stock['change'] ?? 0.0).toStringAsFixed(2)} (${changePercent.toStringAsFixed(1)}%)',
                   style: TextStyle(
                     color: changePercent > 0 ? AppTheme.signalBuy : AppTheme.signalAvoid,
+                    fontSize: 12,
                     fontWeight: FontWeight.w500,
                   ),
                 ),

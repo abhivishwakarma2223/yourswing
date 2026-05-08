@@ -227,7 +227,7 @@ class _ResultScreenState extends State<ResultScreen> {
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
-                    '${isUp ? '+' : ''}${data!['change']} (${data!['changePercent']}%)',
+                    '${isUp ? '+' : '-'}₹${data!['change'].abs().toStringAsFixed(2)} (${data!['changePercent'].toStringAsFixed(1)}%)',
                     style: TextStyle(
                       color: isUp ? const Color(0xFF4ADE80) : const Color(0xFFFF4D6D),
                       fontSize: 12,

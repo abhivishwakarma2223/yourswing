@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'theme/app_theme.dart';
-import 'screens/main_navigation_screen.dart';
+import 'screens/dashboard_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -11,7 +11,7 @@ void main() {
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
       statusBarIconBrightness: Brightness.light,
-      systemNavigationBarColor: Color(0xFF080C14), // Match Bottom Nav
+      systemNavigationBarColor: Color(0xFF020617), // Deep slate bottom
       systemNavigationBarIconBrightness: Brightness.light,
     ),
   );
@@ -28,7 +28,7 @@ class YourSwingApp extends StatelessWidget {
       title: 'YourSwing',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
-      home: const MainNavigationScreen(),
+      home: const DashboardScreen(),
     );
   }
 }
