@@ -30,6 +30,5 @@ Thumbs.db
 *.sqlite3
 
 # Secrets
-config.py
 settings.py
 secrets.py
