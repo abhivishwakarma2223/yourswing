@@ -2,10 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
 import time
-from .database import get_db
+from app.database import get_db
 from app import schemas, crud
 from app.models import Stock
-from .market_api import fetch_daily_candles, fetch_batch_prices
+from app.market_api import fetch_daily_candles, fetch_batch_prices
 
 router = APIRouter(tags=["candles"])
 

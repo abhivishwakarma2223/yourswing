@@ -2,8 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .database import engine, Base
-from .routes import candle_routes
-from .config import settings
+from app.routes import candle_routes
+from app.config import settings
 from contextlib import asynccontextmanager
 import logging
 from sqlalchemy.exc import OperationalError

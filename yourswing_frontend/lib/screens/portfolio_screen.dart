@@ -33,9 +33,14 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
     final data = await _portfolioService.getPortfolio();
     _holdings = data;
     
-    // 2. Fetch live prices and changes for all holdings
+    // 2. Fetch live prices for normalized symbols
     if (_holdings.isNotEmpty) {
-      final symbols = _holdings.map((e) => e.symbol).toList();
+      // Ensure we request symbols with .NS suffix for matching
+      final symbols = _holdings.map((e) {
+        String sym = e.symbol.toUpperCase();
+        return sym.contains('.') ? sym : '$sym.NS';
+      }).toList();
+      
       _liveData = await apiService.fetchLatestPrices(symbols);
     }
     
@@ -51,84 +56,86 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => Container(
-        padding: EdgeInsets.only(
-          bottom: MediaQuery.of(context).viewInsets.bottom + 32,
-          left: 24,
-          right: 24,
-          top: 32,
-        ),
-        decoration: const BoxDecoration(
-          color: Color(0xFF0F172A),
-          borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
-          border: Border(top: BorderSide(color: Colors.white10)),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  item == null ? 'Add Stock' : 'Edit Holding',
-                  style: GoogleFonts.outfit(
-                    color: Colors.white,
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
+      builder: (context) => SingleChildScrollView(
+        child: Container(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(context).viewInsets.bottom + 32,
+            left: 24,
+            right: 24,
+            top: 32,
+          ),
+          decoration: const BoxDecoration(
+            color: Color(0xFF0F172A),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
+            border: Border(top: BorderSide(color: Colors.white10)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    item == null ? 'Add New Stock' : 'Edit Holding',
+                    style: GoogleFonts.outfit(
+                      color: Colors.white,
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
-                ),
-                IconButton(
-                  onPressed: () => Navigator.pop(context),
-                  icon: const Icon(LucideIcons.x, color: Colors.white24),
-                ),
-              ],
-            ),
-            const SizedBox(height: 32),
-            _buildTextField(symbolController, 'STOCK SYMBOL', 'e.g. RELIANCE'),
-            const SizedBox(height: 20),
-            _buildTextField(qtyController, 'QUANTITY', 'e.g. 10', isNumeric: true),
-            const SizedBox(height: 20),
-            _buildTextField(priceController, 'AVG. BUY PRICE', '₹', isNumeric: true),
-            const SizedBox(height: 40),
-            SizedBox(
-              width: double.infinity,
-              height: 56,
-              child: ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppTheme.primaryLight,
-                  elevation: 0,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                ),
-                onPressed: () async {
-                  if (symbolController.text.isEmpty || qtyController.text.isEmpty || priceController.text.isEmpty) return;
-                  
-                  String symbol = symbolController.text.trim().toUpperCase();
-                  if (!symbol.contains('.')) symbol = '$symbol.NS';
+                  IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(LucideIcons.x, color: Colors.white24),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 32),
+              _buildTextField(symbolController, 'STOCK SYMBOL', 'e.g. RELIANCE'),
+              const SizedBox(height: 20),
+              _buildTextField(qtyController, 'QUANTITY', 'e.g. 10', isNumeric: true),
+              const SizedBox(height: 20),
+              _buildTextField(priceController, 'AVG. BUY PRICE', '₹', isNumeric: true),
+              const SizedBox(height: 40),
+              SizedBox(
+                width: double.infinity,
+                height: 56,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.primaryLight,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  ),
+                  onPressed: () async {
+                    if (symbolController.text.isEmpty || qtyController.text.isEmpty || priceController.text.isEmpty) return;
+                    
+                    String symbol = symbolController.text.trim().toUpperCase();
+                    if (!symbol.contains('.')) symbol = '$symbol.NS';
 
-                  final newItem = PortfolioItem(
-                    symbol: symbol,
-                    name: symbol,
-                    quantity: double.tryParse(qtyController.text) ?? 0,
-                    averagePrice: double.tryParse(priceController.text) ?? 0,
-                  );
-                  
-                  await _portfolioService.saveStock(newItem);
-                  _loadPortfolio();
-                  Navigator.pop(context);
-                },
-                child: Text(
-                  item == null ? 'SAVE TO PORTFOLIO' : 'UPDATE HOLDING',
-                  style: GoogleFonts.outfit(
-                    color: Colors.black,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 15,
-                    letterSpacing: 1.2,
+                    final newItem = PortfolioItem(
+                      symbol: symbol,
+                      name: symbol,
+                      quantity: double.tryParse(qtyController.text) ?? 0,
+                      averagePrice: double.tryParse(priceController.text) ?? 0,
+                    );
+                    
+                    await _portfolioService.saveStock(newItem);
+                    _loadPortfolio();
+                    Navigator.pop(context);
+                  },
+                  child: Text(
+                    item == null ? 'SAVE TO PORTFOLIO' : 'UPDATE HOLDING',
+                    style: GoogleFonts.outfit(
+                      color: Colors.black,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 15,
+                      letterSpacing: 1.2,
+                    ),
                   ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -184,8 +191,8 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
           backgroundColor: Colors.transparent,
           elevation: 0,
           title: Text(
-            'My Holdings',
-            style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 28),
+            'Add & Manage Stocks',
+            style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 24),
           ),
           actions: [
             IconButton(
@@ -214,118 +221,138 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
   }
 
   Widget _buildHoldingTile(PortfolioItem item) {
-    String symbol = item.symbol;
-    if (!symbol.contains('.')) symbol = '$symbol.NS';
+    // Normalize symbol for lookups
+    String lookupSymbol = item.symbol.toUpperCase();
+    if (!lookupSymbol.contains('.')) lookupSymbol = '$lookupSymbol.NS';
     
-    final stockData = _liveData[symbol];
+    final stockData = _liveData[lookupSymbol];
     double currentPrice = item.averagePrice;
-    double dailyChange = 0.0;
+    double dailyChangePrice = 0.0;
+    double dailyChangePercent = 0.0;
     
-    if (stockData != null && (stockData['price'] ?? 0) > 0) {
+    bool hasLivePrice = stockData != null && (stockData['price'] ?? 0) > 0;
+    if (hasLivePrice) {
       currentPrice = stockData['price']!;
-      dailyChange = stockData['changePercent'] ?? 0.0;
+      dailyChangePrice = stockData['change'] ?? 0.0;
+      dailyChangePercent = stockData['changePercent'] ?? 0.0;
     }
     
-    double pnl = (currentPrice - item.averagePrice) * item.quantity;
-    double pnlPercent = item.averagePrice > 0 
+    double totalPnl = (currentPrice - item.averagePrice) * item.quantity;
+    double totalPnlPercent = item.averagePrice > 0 
         ? ((currentPrice - item.averagePrice) / item.averagePrice) * 100 
         : 0.0;
         
-    bool isProfit = pnl >= 0;
-    bool isDailyUp = dailyChange >= 0;
+    bool isProfit = totalPnl >= 0;
+    bool isDailyUp = dailyChangePrice >= 0;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [Colors.white.withOpacity(0.05), Colors.white.withOpacity(0.01)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(24),
+        color: const Color(0xFF111827),
+        borderRadius: BorderRadius.circular(20),
         border: Border.all(color: Colors.white.withOpacity(0.05)),
       ),
-      child: Row(
+      child: Column(
         children: [
-          Container(
-            width: 52,
-            height: 52,
-            decoration: BoxDecoration(
-              color: AppTheme.primaryLight.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: const Icon(LucideIcons.briefcase, color: AppTheme.primaryLight, size: 24),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  item.symbol, 
-                  style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 18),
-                ),
-                Text(
-                  '${item.quantity.toInt()} Shares @ ₹${item.averagePrice}', 
-                  style: GoogleFonts.outfit(color: Colors.white.withOpacity(0.4), fontSize: 13),
-                ),
-              ],
-            ),
-          ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
+          Row(
             children: [
-              Row(
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: AppTheme.primaryLight.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(LucideIcons.barChart2, color: AppTheme.primaryLight, size: 20),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      item.symbol, 
+                      style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 17),
+                    ),
+                    Text(
+                      '${item.quantity.toInt()} @ ₹${item.averagePrice}', 
+                      style: GoogleFonts.outfit(color: Colors.white38, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  if (dailyChange != 0)
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    margin: const EdgeInsets.only(right: 8),
-                    decoration: BoxDecoration(
-                      color: (isDailyUp ? AppTheme.signalBuy : AppTheme.signalAvoid).withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Text(
-                      '${isDailyUp ? '+' : ''}${dailyChange.toStringAsFixed(1)}%',
-                      style: TextStyle(
-                        color: isDailyUp ? AppTheme.signalBuy : AppTheme.signalAvoid,
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
                   Text(
                     '₹${currentPrice.toStringAsFixed(2)}',
                     style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
                   ),
+                  Text(
+                    'Live Price',
+                    style: GoogleFonts.outfit(color: Colors.white24, fontSize: 10),
+                  ),
                 ],
               ),
-              const SizedBox(height: 4),
-              Text(
-                '${isProfit ? '+' : ''}₹${pnl.toStringAsFixed(2)} (${pnlPercent.toStringAsFixed(1)}%)',
-                style: GoogleFonts.outfit(
-                  color: isProfit ? AppTheme.signalBuy : AppTheme.signalAvoid,
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                ),
+              const SizedBox(width: 4),
+              PopupMenuButton<String>(
+                icon: const Icon(LucideIcons.moreVertical, color: Colors.white24, size: 18),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+                onSelected: (value) async {
+                  if (value == 'edit') {
+                    _showAddEditModal(item: item);
+                  } else if (value == 'delete') {
+                    await _portfolioService.deleteStock(item.symbol);
+                    _loadPortfolio();
+                  }
+                },
+                itemBuilder: (context) => [
+                  const PopupMenuItem(value: 'edit', child: Text('Edit')),
+                  const PopupMenuItem(value: 'delete', child: Text('Delete')),
+                ],
               ),
             ],
           ),
-          const SizedBox(width: 8),
-          PopupMenuButton<String>(
-            icon: Icon(LucideIcons.moreVertical, color: Colors.white24, size: 20),
-            onSelected: (value) async {
-              if (value == 'edit') {
-                _showAddEditModal(item: item);
-              } else if (value == 'delete') {
-                await _portfolioService.deleteStock(item.symbol);
-                _loadPortfolio();
-              }
-            },
-            itemBuilder: (context) => [
-              const PopupMenuItem(value: 'edit', child: Text('Edit')),
-              const PopupMenuItem(value: 'delete', child: Text('Delete')),
+          const SizedBox(height: 16),
+          Container(height: 1, color: Colors.white.withOpacity(0.03)),
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              // Total P&L
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('TOTAL P&L', style: GoogleFonts.outfit(color: Colors.white24, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${isProfit ? '+' : ''}₹${totalPnl.abs().toStringAsFixed(2)} (${totalPnlPercent.abs().toStringAsFixed(1)}%)',
+                    style: GoogleFonts.outfit(
+                      color: isProfit ? AppTheme.signalBuy : AppTheme.signalAvoid,
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+              // Today's Change
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text('TODAY', style: GoogleFonts.outfit(color: Colors.white24, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.5)),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${isDailyUp ? '+' : ''}₹${dailyChangePrice.abs().toStringAsFixed(2)} (${dailyChangePercent.abs().toStringAsFixed(1)}%)',
+                    style: TextStyle(
+                      color: isDailyUp ? AppTheme.signalBuy : AppTheme.signalAvoid,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
             ],
           ),
         ],

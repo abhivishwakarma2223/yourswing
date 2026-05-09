@@ -44,11 +44,11 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           iconSize: 28, // Slightly larger icons for professional look
           items: const [
             BottomNavigationBarItem(
-              icon: Icon(LucideIcons.home), // Using Home icon as requested
+              icon: Icon(LucideIcons.home),
               label: '',
             ),
             BottomNavigationBarItem(
-              icon: Icon(LucideIcons.briefcase), // Using Briefcase/Portfolio icon
+              icon: Icon(LucideIcons.briefcase),
               label: '',
             ),
           ],

@@ -57,10 +57,11 @@ class ApiService {
           if (value != null && value is Map) {
             results[key] = {
               'price': (value['price'] ?? 0.0).toDouble(),
+              'change': (value['change'] ?? 0.0).toDouble(),
               'changePercent': (value['changePercent'] ?? 0.0).toDouble(),
             };
           } else {
-            results[key] = {'price': 0.0, 'changePercent': 0.0};
+            results[key] = {'price': 0.0, 'change': 0.0, 'changePercent': 0.0};
           }
         });
         return results;

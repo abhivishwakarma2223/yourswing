@@ -39,10 +39,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
     // 2. Load Portfolio Holdings
     final holdingsData = await _portfolioService.getPortfolio();
     
-    // 3. Fetch Live Prices for Holdings
+    // 3. Fetch Live Prices for Holdings (Normalized)
     Map<String, Map<String, double>> prices = {};
     if (holdingsData.isNotEmpty) {
-      final symbols = holdingsData.map((e) => e.symbol).toList();
+      final symbols = holdingsData.map((e) {
+        String sym = e.symbol.toUpperCase();
+        return sym.contains('.') ? sym : '$sym.NS';
+      }).toList();
       prices = await apiService.fetchLatestPrices(symbols);
     }
 
@@ -58,7 +61,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     double totalValue = 0;
     double totalInvestment = 0;
     for (var item in _holdings) {
-      String symbol = item.symbol;
+      String symbol = item.symbol.toUpperCase();
       if (!symbol.contains('.')) symbol = '$symbol.NS';
       
       final stockData = _livePrices[symbol];

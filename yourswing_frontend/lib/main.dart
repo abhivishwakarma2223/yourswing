@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'theme/app_theme.dart';
-import 'screens/dashboard_screen.dart';
+import 'screens/main_navigation_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -28,7 +28,7 @@ class YourSwingApp extends StatelessWidget {
       title: 'YourSwing',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
-      home: const DashboardScreen(),
+      home: const MainNavigationScreen(),
     );
   }
 }
