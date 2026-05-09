@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from typing import List, Optional
-from app.models import Candle
-from app.schemas import CandleCreate
+from .models import Candle
+from .schemas import CandleCreate
 from .models import Candle
 import pandas as pd
 from .models import Candle, Indicator
