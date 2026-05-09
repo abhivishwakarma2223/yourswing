@@ -63,7 +63,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-Base.metadata.create_all(bind=engine)
+# Base.metadata.create_all(bind=engine)  # Removed redundant call; handled in lifespan
 
 app.include_router(candle_routes.router, prefix="/api")
 
