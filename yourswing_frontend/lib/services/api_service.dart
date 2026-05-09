@@ -2,9 +2,8 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 class ApiService {
-  // Use 10.0.2.2 if testing on an Android Emulator
-  // Use 127.0.0.1 or localhost if testing on Windows/Chrome
-  final String baseUrl = 'http://localhost:8001/api';
+  // Production Railway URL
+  final String baseUrl = 'https://yourswing-production.up.railway.app/api';
 
   Future<Map<String, dynamic>?> fetchStockAnalysis(String symbol) async {
     // Normalize: ensure it's uppercase and has .NS if no suffix
