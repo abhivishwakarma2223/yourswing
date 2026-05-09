@@ -6,9 +6,15 @@ class ApiService {
   final String baseUrl = 'https://yourswing-production.up.railway.app/api';
 
   Future<Map<String, dynamic>?> fetchStockAnalysis(String symbol) async {
-    // Normalize: ensure it's uppercase and has .NS if no suffix
+    // Normalize: ensure it's uppercase
     String normalized = symbol.trim().toUpperCase();
-    if (!normalized.contains('.')) normalized = '$normalized.NS';
+    
+    // Only add .NS if it doesn't have a dot and is likely an Indian symbol
+    // (e.g. RELIANCE -> RELIANCE.NS, but AAPL remains AAPL if you want US)
+    if (!normalized.contains('.')) {
+      // Common heuristic for NSE: if it's 5-10 chars and no dot, it's likely NSE
+      normalized = '$normalized.NS';
+    }
     
     try {
       final response = await http.get(Uri.parse('$baseUrl/analysis/$normalized'));
