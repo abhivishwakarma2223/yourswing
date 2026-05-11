@@ -29,6 +29,24 @@ def trigger_sync():
         "timestamp": time.time()
     }
 
+@router.get("/diag")
+def database_diagnostics(db: Session = Depends(get_db)):
+    """Check how many candles each stock has"""
+    from app.models import Candle, Stock
+    from sqlalchemy import func
+    
+    stats = db.query(
+        Stock.symbol, 
+        func.count(Candle.id).label("count")
+    ).join(Candle).group_by(Stock.symbol).all()
+    
+    return {
+        "total_stocks_with_data": len(stats),
+        "requirement": "Minimum 200 candles for v2 scoring",
+        "details": {s: c for s, c in stats}
+    }
+
+
 
 
 # ── SIMPLE MEMORY CACHE FOR TRENDING STOCKS ──────────────────────
