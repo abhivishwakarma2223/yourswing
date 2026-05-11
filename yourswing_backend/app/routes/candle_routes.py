@@ -13,10 +13,22 @@ router = APIRouter(tags=["candles"])
 def health_check():
     return {
         "status": "healthy",
-        "version": "2.0.1",
+        "version": "2.0.2",
         "engine": "Swing Score v2",
         "timestamp": time.time()
     }
+
+@router.get("/sync")
+def trigger_sync():
+    """Manual sync trigger to update DB from cloud environment"""
+    from app.market_api import fetch_all_active_stock_candles
+    print("Starting manual remote sync...")
+    results = fetch_all_active_stock_candles()
+    return {
+        "message": f"Sync complete for {len(results)} stocks",
+        "timestamp": time.time()
+    }
+
 
 
 # ── SIMPLE MEMORY CACHE FOR TRENDING STOCKS ──────────────────────
@@ -27,12 +39,12 @@ TRENDING_CACHE = {
 CACHE_DURATION = 600  # 10 Minutes in seconds
 
 @router.get("/trending")
-def get_trending_stocks(db: Session = Depends(get_db)):
+def get_trending_stocks(refresh: bool = False, db: Session = Depends(get_db)):
     global TRENDING_CACHE
     
     # Check if cache is still valid
     current_time = time.time()
-    if TRENDING_CACHE["data"] and current_time < TRENDING_CACHE["expiry"]:
+    if not refresh and TRENDING_CACHE["data"] and current_time < TRENDING_CACHE["expiry"]:
         print("Serving Trending Stocks from Cache...")
         return TRENDING_CACHE["data"]
 
