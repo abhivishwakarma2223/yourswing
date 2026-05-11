@@ -533,12 +533,14 @@ class RankingEngine:
                 "final_score": r.score,   # alias: RankingResult.score IS final_score
                 "sector": "Unknown",       # TODO: enrich from stock metadata
             }
-            for r in report.top(limit * 2)  # over-fetch so filter has room to trim
+            for r in report.top(limit * 5)  # over-fetch significantly
         ]
 
+        # Use a high limit for "Unknown" so we don't block everything
         filtered = apply_portfolio_concentration_filter(
-            candidates, max_per_sector=2
+            candidates, max_per_sector=10 
         )
+
 
         return filtered[:limit]
 
