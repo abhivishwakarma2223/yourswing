@@ -372,12 +372,13 @@ class _SymbolProcessor:
         # Pass market dict — enables full regime gate (v2 scoring engine)
         result = score_stock(latest, market)
 
+        # Handle the case where score_stock returns a failure dict
+        components_data = result.get("components", {})
         component_scores = {
-            name: comp["score"]
-            for name, comp in result[
-                "components"
-            ].items()
+            name: comp.get("score", 0.0)
+            for name, comp in components_data.items()
         }
+
 
         return RankingResult(
             symbol=symbol,

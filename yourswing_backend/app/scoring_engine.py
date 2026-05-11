@@ -750,94 +750,87 @@ def get_signal(normalized_score: float) -> str:
 
 
 def score_stock(latest: dict, market: Optional[dict] = None) -> dict:
-    """
-    Master scorer — pass in the latest indicator row + market data dict.
+    try:
+        # ── Market Regime ─────────────────────────────────────────────
+        if market:
+            regime_data = classify_market_regime(market)
+        else:
+            regime_data = {
+                "regime": "CHOPPY_BULL",
+                "multiplier": 0.85,
+                "breadth_score": 0,
+                "vix_rising": False,
+                "vix_extreme": False,
+                "detail": {},
+            }
 
-    Parameters
-    ----------
-    latest : dict
-        All stock-level indicator fields (see each sub-function's docstring).
-    market : dict, optional
-        Market-level indicators for regime classification.
-        If None, regime defaults to CHOPPY_BULL (multiplier=0.85).
+        multiplier = regime_data["multiplier"]
 
-    Returns
-    -------
-    dict with keys:
-        raw_score          — sum of component scores before regime multiply
-        normalized_score   — raw score scaled to 100 before regime multiply
-        final_score        — normalized_score × regime_multiplier
-        signal             — STRONG BUY / BUY / WEAK BUY / NEUTRAL / AVOID
-        regime             — TRENDING_BULL / CHOPPY_BULL / CHOPPY_BEAR / TRENDING_BEAR
-        regime_multiplier  — float scalar applied to raw score
-        components         — detailed score breakdown per component
-        component_pct      — each component's score as % of its max
-        flags              — list of operational risk flags
-    """
-    # ── Market Regime ─────────────────────────────────────────────
-    if market:
-        regime_data = classify_market_regime(market)
-    else:
-        regime_data = {
-            "regime": "CHOPPY_BULL",
-            "multiplier": 0.85,
-            "breadth_score": 0,
-            "vix_rising": False,
-            "vix_extreme": False,
-            "detail": {},
+        # ── Component Scores ──────────────────────────────────────────
+        components = {
+            "relative_strength":  score_relative_strength(latest),   # 15
+            "sector_strength":    score_sector_strength(latest),      # 15
+            "trend_structure":    score_trend_structure(latest),      # 18
+            "breakout_quality":   score_breakout_quality(latest),     # 13
+            "risk_reward":        score_risk_reward(latest),          # 12
+            "entry_timing":       score_entry_timing(latest),         # 10
+            "momentum":           score_momentum(latest),              #  5
+            "volatility_quality": score_volatility_quality(latest),   #  5
         }
 
-    multiplier = regime_data["multiplier"]
+        raw_score        = sum(c["score"] for c in components.values())
+        normalized_score = (raw_score / _RAW_MAX) * 100
+        final_score      = normalized_score * multiplier
 
-    # ── Component Scores ──────────────────────────────────────────
-    components = {
-        "relative_strength":  score_relative_strength(latest),   # 15
-        "sector_strength":    score_sector_strength(latest),      # 15
-        "trend_structure":    score_trend_structure(latest),      # 18
-        "breakout_quality":   score_breakout_quality(latest),     # 13
-        "risk_reward":        score_risk_reward(latest),          # 12
-        "entry_timing":       score_entry_timing(latest),         # 10
-        "momentum":           score_momentum(latest),              #  5
-        "volatility_quality": score_volatility_quality(latest),   #  5
-    }
+        signal = get_signal(final_score)
 
-    raw_score        = sum(c["score"] for c in components.values())
-    normalized_score = (raw_score / _RAW_MAX) * 100
-    final_score      = normalized_score * multiplier
+        # Per-component % of max
+        component_pct = {
+            name: round((c["score"] / c["max"]) * 100, 1) if c["max"] > 0 else 0.0
+            for name, c in components.items()
+        }
 
-    signal = get_signal(final_score)
+        # Operational flags
+        flags = check_operational_flags(latest)
 
-    # Per-component % of max
-    component_pct = {
-        name: round((c["score"] / c["max"]) * 100, 1) if c["max"] > 0 else 0.0
-        for name, c in components.items()
-    }
+        result = {
+            "raw_score":          round(raw_score, 2),
+            "normalized_score":   round(normalized_score, 2),
+            "final_score":        round(final_score, 2),
+            "signal":             signal,
+            "regime":             regime_data["regime"],
+            "regime_multiplier":  multiplier,
+            "components":         components,
+            "component_pct":      component_pct,
+            "flags":              flags,
+            "regime_detail":      regime_data,
+        }
 
-    # Operational flags
-    flags = check_operational_flags(latest)
+        flag_str = "; ".join(f["flag"] for f in flags) if flags else "None"
+        logger.info(
+            f"[SCORE] {signal} | Final: {final_score:.1f} "
+            f"(raw {raw_score:.1f}/{_RAW_MAX} × {multiplier}) "
+            f"| Regime: {regime_data['regime']} "
+            f"| Flags: {flag_str}"
+        )
 
-    result = {
-        "raw_score":          round(raw_score, 2),
-        "normalized_score":   round(normalized_score, 2),
-        "final_score":        round(final_score, 2),
-        "signal":             signal,
-        "regime":             regime_data["regime"],
-        "regime_multiplier":  multiplier,
-        "components":         components,
-        "component_pct":      component_pct,
-        "flags":              flags,
-        "regime_detail":      regime_data,
-    }
+        return result
 
-    flag_str = "; ".join(f["flag"] for f in flags) if flags else "None"
-    logger.info(
-        f"[SCORE] {signal} | Final: {final_score:.1f} "
-        f"(raw {raw_score:.1f}/{_RAW_MAX} × {multiplier}) "
-        f"| Regime: {regime_data['regime']} "
-        f"| Flags: {flag_str}"
-    )
-
-    return result
+    except Exception as e:
+        logger.error(f"Error scoring stock: {e}")
+        # Return a safe fallback to prevent API crash
+        return {
+            "raw_score": 0.0,
+            "normalized_score": 0.0,
+            "final_score": 0.0,
+            "signal": "AVOID",
+            "regime": "UNKNOWN",
+            "regime_multiplier": 0.0,
+            "components": {},
+            "component_pct": {},
+            "flags": [{"flag": "SCORING_ERROR", "severity": "HIGH", "detail": str(e)}],
+            "regime_detail": {},
+        }
 
 
 # ─────────────────────────────────────────────────────────────────────────────

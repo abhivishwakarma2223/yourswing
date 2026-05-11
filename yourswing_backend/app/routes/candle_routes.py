@@ -9,6 +9,16 @@ from app.market_api import fetch_daily_candles, fetch_batch_prices
 
 router = APIRouter(tags=["candles"])
 
+@router.get("/health")
+def health_check():
+    return {
+        "status": "healthy",
+        "version": "2.0.1",
+        "engine": "Swing Score v2",
+        "timestamp": time.time()
+    }
+
+
 # ── SIMPLE MEMORY CACHE FOR TRENDING STOCKS ──────────────────────
 TRENDING_CACHE = {
     "data": None,
@@ -33,8 +43,14 @@ def get_trending_stocks(db: Session = Depends(get_db)):
     print("Cache expired. Recalculating Trending Stocks (this takes a few seconds)...")
     
     # 1. Rank Stocks using the Ranking Engine
-    top_stocks = get_top_ranked_stocks(get_db_connection, limit=10)
+    try:
+        top_stocks = get_top_ranked_stocks(get_db_connection, limit=10)
+    except Exception as e:
+        print(f"CRITICAL ERROR in ranking engine: {e}")
+        raise HTTPException(status_code=500, detail=f"Ranking engine error: {str(e)}")
+
     symbols_to_fetch = [s["symbol"] for s in top_stocks]
+
 
     # 2. Fetch live prices in one bulk request (Hyper-speed)
     live_data = fetch_batch_prices(symbols_to_fetch)
