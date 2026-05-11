@@ -1,9 +1,11 @@
 from datetime import datetime, time
 import pytz
 import yfinance as yf
+import pandas as pd
+import time as time_module
 from sqlalchemy import text
 from app.database import engine
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 def is_market_closed() -> bool:
     """
@@ -121,3 +123,120 @@ def fetch_batch_prices(symbols: List[str]) -> Dict:
     except Exception as e:
         print(f"Bulk Fetch Error: {e}")
         return {s: {"price": 0.0, "changePercent": 0.0} for s in original_symbols}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# VIX DATA  (mirrors Nifty cache pattern from indicator_engine.py)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_VIX_CACHE: Optional[pd.DataFrame] = None
+_VIX_LAST_FETCH: Optional[float] = None
+_VIX_CACHE_TTL = 3600   # 1 hour
+
+
+def get_vix_data() -> Optional[pd.DataFrame]:
+    """
+    Fetch India VIX (^INDIAVIX) daily data with a 1-hour in-memory cache.
+    Returns a DataFrame with columns: close, EMA10.
+    Returns None on failure.
+    """
+    global _VIX_CACHE, _VIX_LAST_FETCH
+
+    now = time_module.time()
+    if _VIX_CACHE is not None and _VIX_LAST_FETCH and (now - _VIX_LAST_FETCH < _VIX_CACHE_TTL):
+        return _VIX_CACHE
+
+    try:
+        raw = yf.download("^INDIAVIX", period="1y", progress=False)
+        if raw.empty:
+            return None
+
+        close_series = raw["Close"].squeeze()
+        vix_df = pd.DataFrame({"close": close_series.values}, index=close_series.index)
+
+        # Normalize index
+        if hasattr(vix_df.index, "tz") and vix_df.index.tz is not None:
+            vix_df.index = vix_df.index.tz_localize(None)
+        vix_df.index = vix_df.index.date
+
+        # EMA10 for rising-VIX detection
+        vix_df["EMA10"] = vix_df["close"].ewm(span=10, adjust=False).mean()
+
+        _VIX_CACHE = vix_df
+        _VIX_LAST_FETCH = now
+        return vix_df
+
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Failed to fetch VIX data: {e}")
+        return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MARKET REGIME DICT  (pass directly to classify_market_regime())
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_market_regime_dict() -> dict:
+    """
+    Build the market dict required by classify_market_regime() in scoring_engine.
+    Call once per scan run and reuse across all stocks.
+
+    Fields sourced from live data:
+      NIFTY_CLOSE, NIFTY_EMA20, NIFTY_EMA50, NIFTY_EMA200  — from ^NSEI
+      INDIAVIX, INDIAVIX_EMA10                               — from ^INDIAVIX
+
+    Fields set to neutral defaults (TODO: compute from universe):
+      PCT_ABOVE_EMA50, ADV_DECLINE_RATIO, NEW_HIGHS_52W, NEW_LOWS_52W
+    """
+    from app.indicator_engine import get_nifty_data
+    import pandas_ta as ta
+
+    # ── Nifty ─────────────────────────────────────────────────────
+    nifty_df = get_nifty_data()
+    if nifty_df is None or nifty_df.empty:
+        # Return safe neutral fallback — caller will get CHOPPY_BULL regime
+        return {
+            "NIFTY_CLOSE":       0.0,
+            "NIFTY_EMA20":       0.0,
+            "NIFTY_EMA50":       0.0,
+            "NIFTY_EMA200":      0.0,
+            "INDIAVIX":          15.0,
+            "INDIAVIX_EMA10":    15.0,
+            "PCT_ABOVE_EMA50":   50.0,
+            "ADV_DECLINE_RATIO": 1.0,
+            "NEW_HIGHS_52W":     0,
+            "NEW_LOWS_52W":      0,
+        }
+
+    # EMA200 on Nifty (indicator_engine only stores EMA20 + EMA50)
+    nifty_ema200 = float(
+        ta.ema(nifty_df["close"], length=200).iloc[-1]
+    ) if len(nifty_df) >= 200 else float(nifty_df["close"].iloc[-1])
+
+    nifty_latest = nifty_df.iloc[-1]
+
+    # ── VIX ───────────────────────────────────────────────────────
+    vix_df = get_vix_data()
+    if vix_df is not None and not vix_df.empty:
+        vix_close  = float(vix_df["close"].iloc[-1])
+        vix_ema10  = float(vix_df["EMA10"].iloc[-1])
+    else:
+        vix_close  = 15.0   # neutral fallback
+        vix_ema10  = 15.0
+
+    return {
+        "NIFTY_CLOSE":       float(nifty_latest["close"]),
+        "NIFTY_EMA20":       float(nifty_latest["EMA20"]),
+        "NIFTY_EMA50":       float(nifty_latest["EMA50"]),
+        "NIFTY_EMA200":      nifty_ema200,
+        "INDIAVIX":          vix_close,
+        "INDIAVIX_EMA10":    vix_ema10,
+        # ── Cross-sectional fields (need full Nifty 200 universe) ──
+        # TODO: compute PCT_ABOVE_EMA50 by looping all N200 stocks
+        # TODO: fetch ADV_DECLINE_RATIO from NSE bhav copy
+        # TODO: count NEW_HIGHS_52W / NEW_LOWS_52W from universe
+        "PCT_ABOVE_EMA50":   50.0,
+        "ADV_DECLINE_RATIO": 1.0,
+        "NEW_HIGHS_52W":     0,
+        "NEW_LOWS_52W":      0,
+    }

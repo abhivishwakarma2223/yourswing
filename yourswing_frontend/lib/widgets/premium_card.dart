@@ -22,22 +22,23 @@ class PremiumCard extends StatelessWidget {
     Widget card = Container(
       padding: padding,
       decoration: BoxDecoration(
-        color: color ?? AppTheme.surfaceWhite,
+        color: color ?? AppTheme.surfaceWhite.withOpacity(0.6),
         borderRadius: BorderRadius.circular(borderRadius),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.08),
-            blurRadius: 30,
+            color: Colors.black.withOpacity(0.2),
+            blurRadius: 20,
             offset: const Offset(0, 10),
           ),
           BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 5),
+            color: Colors.white.withOpacity(0.02),
+            blurRadius: 1,
+            spreadRadius: 0,
+            offset: const Offset(0, -1),
           ),
         ],
         border: Border.all(
-          color: Colors.white.withOpacity(0.05),
+          color: Colors.white.withOpacity(0.08),
           width: 1,
         ),
       ),

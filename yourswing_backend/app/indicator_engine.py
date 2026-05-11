@@ -5,6 +5,16 @@ import yfinance as yf
 import time
 import numpy as np
 
+# v2 score engine helpers
+from app.scoring_engine import (
+    add_volume_trend,
+    add_roc_columns,
+    add_rsi_prev,
+    add_run_from_base,
+    add_52w_high,
+    add_hv_percentile,
+)
+
 logger = logging.getLogger(__name__)
 
 NIFTY_CACHE = None
@@ -143,5 +153,13 @@ def calculate_indicators(df):
         (df["EMA20"] > df["EMA50"]) &
         (df["EMA50"] > df["EMA200"])
     )
+
+    # ── v2 Scoring Engine Helpers ─────────────────────────────────
+    df = add_volume_trend(df)
+    df = add_roc_columns(df)
+    df = add_rsi_prev(df)
+    df = add_run_from_base(df)
+    df = add_52w_high(df)
+    df = add_hv_percentile(df)
 
     return df

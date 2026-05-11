@@ -70,8 +70,8 @@ def get_candles_dataframe(db, stock_id):
 import math
 
 def get_latest_analysis(db, stock_id):
-    from app.indicator_engine import calculate_indicators, get_nifty_data
-    from app.scoring_engine import score_stock, get_signal
+    from app.indicator_engine import calculate_indicators
+    from app.scoring_engine import score_stock
 
     df = get_candles_dataframe(db, stock_id)
     if df.empty:
@@ -81,19 +81,19 @@ def get_latest_analysis(db, stock_id):
     latest_row = df.iloc[-1]
 
     def clean_val(v):
-        if pd.isna(v) or math.isnan(v):
+        try:
+            f = float(v)
+            if pd.isna(f) or math.isnan(f):
+                return 0.0
+            return f
+        except (TypeError, ValueError):
             return 0.0
-        return float(v)
-        
-    nifty_df = get_nifty_data()
-    market_bullish = False
-    if nifty_df is not None and not nifty_df.empty:
-        last_nifty = nifty_df.iloc[-1]
-        market_bullish = bool(last_nifty.get("MARKET_BULLISH", False))
-        
-    score_result = score_stock(latest_row.to_dict(), df, market_bullish)
-    score = score_result["total_score"]
-    signal = get_signal(score)
+
+    # v2 score_stock takes (latest_dict, market=None)
+    # market=None defaults to CHOPPY_BULL (multiplier=0.85)
+    score_result = score_stock(latest_row.to_dict())
+    score = score_result["final_score"]
+    signal = score_result["signal"]
 
     indicators_dict = {
         "RSI": clean_val(latest_row.get("RSI", 0)),

@@ -13,7 +13,8 @@ from typing import Any, Optional
 import pandas as pd
 
 from app.indicator_engine import calculate_indicators, get_nifty_data
-from app.scoring_engine import score_stock
+from app.scoring_engine import score_stock, apply_portfolio_concentration_filter
+from app.market_api import get_market_regime_dict
 
 logger = logging.getLogger(__name__)
 
@@ -247,7 +248,7 @@ class _SymbolProcessor:
         self._repo = repo
         self._limit = candle_limit
 
-    def process(self, symbol: str) -> RankingResult:
+    def process(self, symbol: str, market: dict) -> RankingResult:
 
         df = self._fetch(symbol)
 
@@ -255,7 +256,7 @@ class _SymbolProcessor:
 
         df = self._indicators(symbol, df)
 
-        result = self._score(symbol, df)
+        result = self._score(symbol, df, market)
 
         return result
 
@@ -320,10 +321,6 @@ class _SymbolProcessor:
 
         df = calculate_indicators(df)
 
-        # IMPORTANT FIX:
-        # remove NaN rows after indicators
-        df = df.dropna().reset_index(drop=True)
-
         critical = [
             "RSI",
             "EMA20",
@@ -345,6 +342,11 @@ class _SymbolProcessor:
                     f"Indicator all NaN: {col}"
                 )
 
+        # Only drop rows where CORE indicators are NaN.
+        # v2 helpers (HV_PERCENTILE, ROC_6M, etc.) need 252 candles
+        # to fully populate — dropping all NaN rows would wipe the df.
+        df = df.dropna(subset=critical).reset_index(drop=True)
+
         return df
 
     # ========================================================
@@ -355,6 +357,7 @@ class _SymbolProcessor:
         self,
         symbol: str,
         df: pd.DataFrame,
+        market: dict,
     ) -> RankingResult:
 
         latest = df.iloc[-1].to_dict()
@@ -366,7 +369,8 @@ class _SymbolProcessor:
                 "Latest close price invalid"
             )
 
-        result = score_stock(latest)
+        # Pass market dict — enables full regime gate (v2 scoring engine)
+        result = score_stock(latest, market)
 
         component_scores = {
             name: comp["score"]
@@ -377,7 +381,7 @@ class _SymbolProcessor:
 
         return RankingResult(
             symbol=symbol,
-            score=result["total_score"],
+            score=result["final_score"],
             signal=result["signal"],
             signal_rank=SIGNAL_RANK.get(
                 result["signal"],
@@ -460,6 +464,14 @@ class RankingEngine:
 
         get_nifty_data()
 
+        # Fetch market regime dict ONCE — reused for all stocks in the scan
+        logger.info("Fetching market regime data (Nifty + VIX)...")
+        market = get_market_regime_dict()
+        logger.info(
+            f"Market regime: {market.get('NIFTY_CLOSE', '?')} close | "
+            f"VIX: {market.get('INDIAVIX', '?')}"
+        )
+
         if symbols is None:
 
             logger.info(
@@ -473,7 +485,7 @@ class RankingEngine:
         )
 
         ranked, errors = self._run_parallel(
-            symbols
+            symbols, market
         )
 
         ranked.sort(
@@ -513,10 +525,21 @@ class RankingEngine:
 
         report = self.run()
 
-        return [
-            r.to_dict()
-            for r in report.top(limit)
+        # Build dicts with the keys apply_portfolio_concentration_filter expects
+        candidates = [
+            {
+                **r.to_dict(),
+                "final_score": r.score,   # alias: RankingResult.score IS final_score
+                "sector": "Unknown",       # TODO: enrich from stock metadata
+            }
+            for r in report.top(limit * 2)  # over-fetch so filter has room to trim
         ]
+
+        filtered = apply_portfolio_concentration_filter(
+            candidates, max_per_sector=2
+        )
+
+        return filtered[:limit]
 
     # ========================================================
     # PARALLEL EXECUTION
@@ -525,6 +548,7 @@ class RankingEngine:
     def _run_parallel(
         self,
         symbols: list[str],
+        market: dict,
     ):
 
         ranked: list[RankingResult] = []
@@ -538,6 +562,7 @@ class RankingEngine:
                 pool.submit(
                     self._safe_process,
                     symbol,
+                    market,           # passed to every worker thread (read-only, thread-safe)
                 ): symbol
                 for symbol in symbols
             }
@@ -585,6 +610,7 @@ class RankingEngine:
     def _safe_process(
         self,
         symbol: str,
+        market: dict,
     ):
 
         t0 = time.perf_counter()
@@ -603,7 +629,7 @@ class RankingEngine:
             df = self._processor._indicators(symbol, df)
 
             stage = "scoring"
-            result = self._processor._score(symbol, df)
+            result = self._processor._score(symbol, df, market)
 
             elapsed = (
                 time.perf_counter()

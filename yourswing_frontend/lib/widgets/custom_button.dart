@@ -41,20 +41,25 @@ class CustomButton extends StatelessWidget {
     return Container(
       width: isFullWidth ? double.infinity : null,
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(18),
         gradient: const LinearGradient(
           colors: [
-            AppTheme.primaryLight,
-            AppTheme.primaryDark,
+            Color(0xFF00FF88), // More vibrant green
+            Color(0xFF00C853),
           ],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
         boxShadow: [
           BoxShadow(
-            color: AppTheme.primaryLight.withOpacity(0.3),
-            blurRadius: 12,
-            offset: const Offset(0, 6),
+            color: const Color(0xFF00E676).withOpacity(0.3),
+            blurRadius: 20,
+            offset: const Offset(0, 10),
+          ),
+          BoxShadow(
+            color: Colors.black.withOpacity(0.2),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
           ),
         ],
       ),

@@ -108,30 +108,70 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Welcome back,',
+                              style: GoogleFonts.outfit(
+                                color: Colors.white.withOpacity(0.5),
+                                fontSize: 14,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            Text(
+                              'Abhivishwakarma',
+                              style: GoogleFonts.outfit(
+                                color: Colors.white,
+                                fontSize: 26,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: -0.5,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Stack(
                         children: [
-                          Text(
-                            'Welcome back,',
-                            style: GoogleFonts.outfit(color: Colors.white60, fontSize: 14),
+                          Container(
+                            width: 52,
+                            height: 52,
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: [
+                                  AppTheme.primaryLight.withOpacity(0.2),
+                                  AppTheme.primaryLight.withOpacity(0.05),
+                                ],
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                              ),
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: AppTheme.primaryLight.withOpacity(0.2),
+                                width: 1.5,
+                              ),
+                            ),
+                            child: const Icon(
+                              LucideIcons.user,
+                              color: AppTheme.primaryLight,
+                              size: 24,
+                            ),
                           ),
-                          Text(
-                            'Abhivishwakarma',
-                            style: GoogleFonts.outfit(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold),
+                          Positioned(
+                            right: 2,
+                            top: 2,
+                            child: Container(
+                              width: 12,
+                              height: 12,
+                              decoration: BoxDecoration(
+                                color: AppTheme.primaryLight,
+                                shape: BoxShape.circle,
+                                border: Border.all(color: AppTheme.background, width: 2),
+                              ),
+                            ),
                           ),
                         ],
-                      ),
-                      Container(
-                        width: 48,
-                        height: 48,
-                        decoration: BoxDecoration(
-                          color: AppTheme.primaryLight.withOpacity(0.1),
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(
-                          LucideIcons.user,
-                          color: AppTheme.primaryDark,
-                        ),
                       )
                     ],
                   ).animate().fade().slideY(begin: -0.2),
@@ -182,92 +222,149 @@ class _DashboardScreenState extends State<DashboardScreen> {
     bool isProfit = stats['pnl']! >= 0;
     return Container(
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(24),
-        gradient: const LinearGradient(
-          colors: [Color(0xFF1E293B), Color(0xFF0F172A)],
+        borderRadius: BorderRadius.circular(28),
+        gradient: LinearGradient(
+          colors: [
+            const Color(0xFF1E293B),
+            const Color(0xFF0F172A).withOpacity(0.8),
+          ],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
         border: Border.all(
-          color: AppTheme.primaryLight.withOpacity(0.4),
-          width: 1.0,
+          color: Colors.white.withOpacity(0.08),
+          width: 1.5,
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.2),
-            blurRadius: 20,
-            offset: const Offset(0, 10),
+            color: Colors.black.withOpacity(0.4),
+            blurRadius: 24,
+            offset: const Offset(0, 12),
+          ),
+          BoxShadow(
+            color: AppTheme.primaryLight.withOpacity(0.05),
+            blurRadius: 40,
+            spreadRadius: -10,
           )
         ],
       ),
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Total Portfolio',
-                style: GoogleFonts.outfit(color: Colors.white60, fontSize: 16),
+          // Background Decorative Circle
+          Positioned(
+            right: -50,
+            top: -50,
+            child: Container(
+              width: 150,
+              height: 150,
+              decoration: BoxDecoration(
+                color: AppTheme.primaryLight.withOpacity(0.03),
+                shape: BoxShape.circle,
               ),
-              IconButton(
-                visualDensity: VisualDensity.compact,
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
-                icon: const Icon(LucideIcons.refreshCw, color: Colors.white24, size: 18),
-                onPressed: _loadData,
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            '₹${stats['total']!.toStringAsFixed(2)}',
-            style: GoogleFonts.outfit(
-              color: Colors.white,
-              fontSize: 36,
-              fontWeight: FontWeight.bold,
-              letterSpacing: -1,
             ),
           ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: (isProfit ? AppTheme.signalBuy : AppTheme.signalAvoid).withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: (isProfit ? AppTheme.signalBuy : AppTheme.signalAvoid).withOpacity(0.3)),
-                ),
-                child: Row(
+          Padding(
+            padding: const EdgeInsets.all(28),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Icon(
-                      isProfit ? LucideIcons.trendingUp : LucideIcons.trendingDown,
-                      color: isProfit ? AppTheme.signalBuy : AppTheme.signalAvoid,
-                      size: 16,
+                    Expanded(
+                      child: Text(
+                        'Total Portfolio Value',
+                        style: GoogleFonts.outfit(
+                          color: Colors.white.withOpacity(0.5),
+                          fontSize: 15,
+                          fontWeight: FontWeight.w500,
+                          letterSpacing: 0.2,
+                        ),
+                      ),
                     ),
-                    const SizedBox(width: 6),
-                    Text(
-                      '${isProfit ? '+' : ''}₹${stats['pnl']!.toStringAsFixed(2)} (${stats['percent']!.toStringAsFixed(1)}%)',
-                      style: TextStyle(
-                        color: isProfit ? AppTheme.signalBuy : AppTheme.signalAvoid,
-                        fontWeight: FontWeight.bold,
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.05),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: IconButton(
+                        visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.all(4),
+                        constraints: const BoxConstraints(),
+                        icon: Icon(LucideIcons.refreshCw, color: Colors.white.withOpacity(0.4), size: 16),
+                        onPressed: _loadData,
                       ),
                     ),
                   ],
                 ),
-              ),
-              const SizedBox(width: 12),
-              Text(
-                'Live Gain',
-                style: GoogleFonts.outfit(color: Colors.white38, fontSize: 13),
-              )
-            ],
-          )
+                const SizedBox(height: 12),
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    '₹${stats['total']!.toStringAsFixed(2)}',
+                    style: GoogleFonts.outfit(
+                      color: Colors.white,
+                      fontSize: 42,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: -1.5,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: (isProfit ? AppTheme.signalBuy : AppTheme.signalAvoid).withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color: (isProfit ? AppTheme.signalBuy : AppTheme.signalAvoid).withOpacity(0.2),
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              isProfit ? LucideIcons.trendingUp : LucideIcons.trendingDown,
+                              color: isProfit ? AppTheme.signalBuy : AppTheme.signalAvoid,
+                              size: 16,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              '${isProfit ? '+' : ''}₹${stats['pnl']!.toStringAsFixed(2)} (${stats['percent']!.toStringAsFixed(1)}%)',
+                              style: GoogleFonts.outfit(
+                                color: isProfit ? AppTheme.signalBuy : AppTheme.signalAvoid,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      Text(
+                        'Live Performance',
+                        style: GoogleFonts.outfit(
+                          color: Colors.white.withOpacity(0.3),
+                          fontSize: 13,
+                          fontWeight: FontWeight.w400,
+                        ),
+                      )
+                    ],
+                  ),
+                )
+              ],
+            ),
+          ),
         ],
       ),
-    ).animate().fade(delay: 100.ms).slideY(begin: 0.2);
+    ).animate().fade(delay: 100.ms).slideY(begin: 0.2, curve: Curves.easeOutQuad);
   }
 
   Widget _buildTrendingTile(Map<String, dynamic> stock) {
@@ -283,88 +380,113 @@ class _DashboardScreenState extends State<DashboardScreen> {
     else badgeColor = AppTheme.signalNeutral;
     
     return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.only(bottom: 16),
       child: PremiumCard(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
         child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Row(
+            // Score indicator
+            Stack(
+              alignment: Alignment.center,
               children: [
-                Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    SizedBox(
-                      width: 44,
-                      height: 44,
-                      child: CircularProgressIndicator(
-                        value: score / 100.0,
-                        backgroundColor: Colors.white.withOpacity(0.05),
-                        color: badgeColor,
-                        strokeWidth: 3.5,
-                        strokeCap: StrokeCap.round,
-                      ),
-                    ),
-                    Text(
-                      score.toInt().toString(),
-                      style: GoogleFonts.outfit(
-                        color: badgeColor,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(width: 16),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Text(
-                          stock['symbol'],
-                          style: GoogleFonts.outfit(fontWeight: FontWeight.w600, fontSize: 16, color: Colors.white),
-                        ),
-                        const SizedBox(width: 8),
-                        if (signal != null)
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: badgeColor.withOpacity(0.1),
-                              border: Border.all(color: badgeColor, width: 1),
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Text(
-                              signal.toUpperCase(),
-                              style: TextStyle(color: badgeColor, fontSize: 10, fontWeight: FontWeight.bold),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ],
-                ),
-              ],
-            ),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(
-                  '₹$price',
-                  style: GoogleFonts.outfit(fontWeight: FontWeight.w600, fontSize: 16, color: Colors.white),
+                SizedBox(
+                  width: 48,
+                  height: 48,
+                  child: CircularProgressIndicator(
+                    value: score / 100.0,
+                    backgroundColor: Colors.white.withOpacity(0.03),
+                    color: badgeColor.withOpacity(0.8),
+                    strokeWidth: 4,
+                    strokeCap: StrokeCap.round,
+                  ),
                 ),
                 Text(
-                  '${changePercent > 0 ? '+' : ''}₹${(stock['change'] ?? 0.0).toStringAsFixed(2)} (${changePercent.toStringAsFixed(1)}%)',
-                  style: TextStyle(
-                    color: changePercent > 0 ? AppTheme.signalBuy : AppTheme.signalAvoid,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
+                  score.toInt().toString(),
+                  style: GoogleFonts.outfit(
+                    color: badgeColor,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
                   ),
                 ),
               ],
             ),
+            const SizedBox(width: 16),
+            
+            // Symbol and Signal
+            Expanded(
+              flex: 3,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    stock['symbol'],
+                    style: GoogleFonts.outfit(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 17,
+                      color: Colors.white,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  if (signal != null)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: badgeColor.withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: badgeColor.withOpacity(0.3), width: 1),
+                      ),
+                      child: Text(
+                        signal.toUpperCase(),
+                        style: GoogleFonts.outfit(
+                          color: badgeColor,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            
+            // Price and Change
+            Expanded(
+              flex: 2,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      '₹${price.toStringAsFixed(2)}',
+                      style: GoogleFonts.outfit(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 18,
+                        color: Colors.white,
+                        letterSpacing: -0.5,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      '${changePercent > 0 ? '+' : ''}${changePercent.toStringAsFixed(2)}%',
+                      style: GoogleFonts.outfit(
+                        color: changePercent > 0 ? AppTheme.signalBuy : AppTheme.signalAvoid,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ],
         ),
       ),
-    ).animate().fade(delay: 400.ms).slideX(begin: 0.1);
+    ).animate().fade(delay: 400.ms).slideX(begin: 0.1, curve: Curves.easeOutQuad);
   }
 }
