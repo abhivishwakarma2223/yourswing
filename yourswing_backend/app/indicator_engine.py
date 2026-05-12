@@ -48,13 +48,19 @@ def get_nifty_data():
         nifty_df.index = nifty_df.index.date
 
         # Use pandas_ta instead of talib
-        nifty_df["EMA20"] = ta.ema(nifty_df["close"], length=20)
-        nifty_df["EMA50"] = ta.ema(nifty_df["close"], length=50)
+        ema20 = ta.ema(nifty_df["close"], length=20)
+        nifty_df["EMA20"] = ema20.fillna(nifty_df["close"]) if ema20 is not None else nifty_df["close"]
 
+        ema50 = ta.ema(nifty_df["close"], length=50)
+        nifty_df["EMA50"] = ema50.fillna(nifty_df["close"]) if ema50 is not None else nifty_df["close"]
+
+        # Safe boolean series for regime
         nifty_df["MARKET_BULLISH"] = (
-            (nifty_df["close"] > nifty_df["EMA20"]) &
-            (nifty_df["EMA20"] > nifty_df["EMA50"])
+            (nifty_df["close"].fillna(0) > nifty_df["EMA20"].fillna(0)) &
+            (nifty_df["EMA20"].fillna(0) > nifty_df["EMA50"].fillna(0))
         )
+
+
 
         NIFTY_CACHE = nifty_df
         LAST_FETCH_TIME = time.time()
@@ -75,10 +81,19 @@ def calculate_indicators(df):
     # pandas_ta works best with columns named 'open', 'high', 'low', 'close', 'volume'
     
     # ── Core Indicators (using pandas_ta) ────────────────────────
-    df["RSI"]    = ta.rsi(df["close"], length=14)
-    df["EMA20"]  = ta.ema(df["close"], length=20)
-    df["EMA50"]  = ta.ema(df["close"], length=50)
-    df["EMA200"] = ta.ema(df["close"], length=200)
+    rsi = ta.rsi(df["close"], length=14)
+    df["RSI"] = rsi.fillna(50.0) if rsi is not None else 50.0
+    
+    ema20 = ta.ema(df["close"], length=20)
+    df["EMA20"] = ema20.fillna(df["close"]) if ema20 is not None else df["close"]
+    
+    ema50 = ta.ema(df["close"], length=50)
+    df["EMA50"] = ema50.fillna(df["close"]) if ema50 is not None else df["close"]
+    
+    ema200 = ta.ema(df["close"], length=200)
+    df["EMA200"] = ema200.fillna(df["close"]) if ema200 is not None else df["close"]
+
+
 
     # MACD
     macd_df = ta.macd(df["close"], fast=12, slow=26, signal=9)

@@ -72,12 +72,27 @@ import math
 def get_latest_analysis(db, stock_id):
     from app.indicator_engine import calculate_indicators
     from app.scoring_engine import score_stock
+    from app.preprocessing.pipeline import run_preprocessing_pipeline
+    from app.market_api import get_market_regime_dict
+    from app.preprocessing.rs_ranking import compute_rs_rankings
+    from app.preprocessing.sector_intelligence import compute_sector_data
 
     df = get_candles_dataframe(db, stock_id)
     if df.empty:
         return None
 
+    # Core indicators
     df = calculate_indicators(df)
+    symbol = db.query(Stock.symbol).filter(Stock.id == stock_id).scalar()
+    
+    # For single-stock analysis, we might not have batch RS/Sector data pre-computed.
+    # We'll compute it on the fly for just this symbol if needed, though RS ranking usually needs the whole universe.
+    # For simplicity, we'll pass None and the pipeline will use defaults/cached data if available.
+    market = get_market_regime_dict()
+    
+    # Run full institutional pipeline
+    df = run_preprocessing_pipeline(symbol, df)
+    
     latest_row = df.iloc[-1]
 
     def clean_val(v):
@@ -89,9 +104,7 @@ def get_latest_analysis(db, stock_id):
         except (TypeError, ValueError):
             return 0.0
 
-    # v2 score_stock takes (latest_dict, market=None)
-    # market=None defaults to CHOPPY_BULL (multiplier=0.85)
-    score_result = score_stock(latest_row.to_dict())
+    score_result = score_stock(latest_row.to_dict(), market=market)
     score = score_result["final_score"]
     signal = score_result["signal"]
 
@@ -100,10 +113,9 @@ def get_latest_analysis(db, stock_id):
         "EMA20": clean_val(latest_row.get("EMA20", 0)),
         "EMA50": clean_val(latest_row.get("EMA50", 0)),
         "MACD": clean_val(latest_row.get("MACD", 0)),
-        "MACD_SIGNAL": clean_val(latest_row.get("MACD_SIGNAL", 0)),
         "ATR": clean_val(latest_row.get("ATR", 0)),
         "VOLUME_RATIO": clean_val(latest_row.get("VOLUME_RATIO", 0)),
-        "RELATIVE_STRENGTH": clean_val(latest_row.get("RELATIVE_STRENGTH", 0)),
+        "RELATIVE_STRENGTH": clean_val(latest_row.get("RS_PERCENTILE_RANK", 0)), # Using the new RS rank
         "BREAKOUT": bool(latest_row.get("BREAKOUT", False))
     }
 
@@ -117,7 +129,10 @@ def get_latest_analysis(db, stock_id):
         "relative_strength": round(indicators_dict["RELATIVE_STRENGTH"], 2),
         "breakout": indicators_dict["BREAKOUT"],
         "signal": signal,
-        "score": score
+        "score": score,
+        "components": score_result.get("components", {}),
+        "regime": score_result.get("regime", "UNKNOWN"),
+        "regime_multiplier": score_result.get("regime_multiplier", 1.0)
     }
 
 def analyze_stock_with_live_price(db: Session, stock_id: int):

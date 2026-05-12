@@ -401,11 +401,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                 ),
                 Text(
-                  score.toInt().toString(),
+                  score.toStringAsFixed(1),
                   style: GoogleFonts.outfit(
                     color: badgeColor,
                     fontWeight: FontWeight.bold,
-                    fontSize: 16,
+                    fontSize: 14, // Slightly smaller to fit decimals
                   ),
                 ),
               ],

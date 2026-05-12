@@ -15,6 +15,9 @@ import pandas as pd
 from app.indicator_engine import calculate_indicators, get_nifty_data
 from app.scoring_engine import score_stock, apply_portfolio_concentration_filter
 from app.market_api import get_market_regime_dict
+from app.preprocessing.rs_ranking import compute_rs_rankings
+from app.preprocessing.sector_intelligence import compute_sector_data, get_sector_for_symbol
+from app.preprocessing.pipeline import run_preprocessing_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -256,6 +259,9 @@ class _SymbolProcessor:
 
         df = self._indicators(symbol, df)
 
+        # Preprocessing pipeline
+        df = run_preprocessing_pipeline(symbol, df, rs_rankings, sector_data)
+
         result = self._score(symbol, df, market)
 
         return result
@@ -481,12 +487,38 @@ class RankingEngine:
 
             symbols = self._repo.get_active_symbols()
 
+        # NEW: Batch preprocessing for RS and Sectors
+        # We need candle data for all symbols to do RS ranking
+        logger.info("Pre-fetching all candle data for batch rankings...")
+        candles_by_symbol = {}
+        for sym in symbols:
+            try:
+                cdf = self._repo.get_candles(sym, PREFERRED_CANDLES)
+                if not cdf.empty:
+                    # Run basic indicators for breadth/sector analysis (needs EMA50)
+                    cdf = calculate_indicators(cdf)
+                    candles_by_symbol[sym] = cdf
+            except:
+                continue
+
+        logger.info("Computing batch RS rankings...")
+        rs_rankings = compute_rs_rankings(candles_by_symbol, nifty_df=get_nifty_data())
+        
+        logger.info("Computing batch sector intelligence...")
+        sector_data = compute_sector_data(candles_by_symbol, rs_rankings)
+
+        # NEW: Compute real market breadth for regime classification
+        from app.market_api import compute_market_breadth
+        logger.info("Computing real market breadth...")
+        breadth_data = compute_market_breadth(candles_by_symbol)
+        market = get_market_regime_dict(breadth_data=breadth_data)
+
         logger.info(
             f"Ranking {len(symbols)} symbols"
         )
 
         ranked, errors = self._run_parallel(
-            symbols, market
+            symbols, market, rs_rankings, sector_data
         )
 
         ranked.sort(
@@ -531,14 +563,14 @@ class RankingEngine:
             {
                 **r.to_dict(),
                 "final_score": r.score,   # alias: RankingResult.score IS final_score
-                "sector": "Unknown",       # TODO: enrich from stock metadata
+                "sector": get_sector_for_symbol(r.symbol),
             }
             for r in report.top(limit * 5)  # over-fetch significantly
         ]
 
         # Use a high limit for "Unknown" so we don't block everything
         filtered = apply_portfolio_concentration_filter(
-            candidates, max_per_sector=10 
+            candidates, max_per_sector=2 
         )
 
 
@@ -552,6 +584,8 @@ class RankingEngine:
         self,
         symbols: list[str],
         market: dict,
+        rs_rankings: dict,
+        sector_data: dict,
     ):
 
         ranked: list[RankingResult] = []
@@ -565,7 +599,9 @@ class RankingEngine:
                 pool.submit(
                     self._safe_process,
                     symbol,
-                    market,           # passed to every worker thread (read-only, thread-safe)
+                    market,
+                    rs_rankings,
+                    sector_data
                 ): symbol
                 for symbol in symbols
             }
@@ -614,6 +650,8 @@ class RankingEngine:
         self,
         symbol: str,
         market: dict,
+        rs_rankings: dict,
+        sector_data: dict,
     ):
 
         t0 = time.perf_counter()
@@ -630,6 +668,9 @@ class RankingEngine:
 
             stage = "indicators"
             df = self._processor._indicators(symbol, df)
+
+            stage = "preprocessing"
+            df = run_preprocessing_pipeline(symbol, df, rs_rankings, sector_data)
 
             stage = "scoring"
             result = self._processor._score(symbol, df, market)

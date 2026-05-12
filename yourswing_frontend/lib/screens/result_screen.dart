@@ -283,7 +283,7 @@ class _ResultScreenState extends State<ResultScreen> {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  'Signal Accuracy: ${score.toInt()}%',
+                  'Signal Accuracy: ${score.toStringAsFixed(1)}%',
                   style: TextStyle(
                     color: Colors.white.withOpacity(0.3),
                     fontSize: 11,
@@ -405,11 +405,11 @@ class _ScoreRing extends StatelessWidget {
               child: FittedBox(
                 fit: BoxFit.scaleDown,
                 child: Text(
-                  '${score.toInt()}%',
+                  '${score.toStringAsFixed(1)}%',
                   style: const TextStyle(
                     color: Colors.white,
                     fontWeight: FontWeight.w800,
-                    fontSize: 22, // Base size, FittedBox will scale it
+                    fontSize: 20, // Slightly smaller for decimals
                     height: 1,
                   ),
                 ),

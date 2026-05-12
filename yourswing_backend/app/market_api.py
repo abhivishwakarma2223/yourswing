@@ -176,25 +176,98 @@ def get_vix_data() -> Optional[pd.DataFrame]:
 # MARKET REGIME DICT  (pass directly to classify_market_regime())
 # ─────────────────────────────────────────────────────────────────────────────
 
-def get_market_regime_dict() -> dict:
+def _safe_float(v, default=0.0):
+    try:
+        import numpy as np
+        if v is None or (isinstance(v, float) and np.isnan(v)):
+            return default
+        return float(v)
+    except:
+        return default
+
+def compute_market_breadth(candles_by_symbol: Dict[str, pd.DataFrame]) -> dict:
+    """
+    Compute market-wide breadth metrics from a batch of candle DataFrames.
+    """
+    if not candles_by_symbol:
+        return {
+            "PCT_ABOVE_EMA50": 50.0,
+            "ADV_DECLINE_RATIO": 1.0,
+            "NEW_HIGHS_52W": 0,
+            "NEW_LOWS_52W": 0
+        }
+
+    above_ema50 = 0
+    advances = 0
+    declines = 0
+    new_highs = 0
+    new_lows = 0
+    total = 0
+
+    for sym, df in candles_by_symbol.items():
+        if df.empty: continue
+        latest = df.iloc[-1]
+        
+        total += 1
+        # Above EMA50
+        close = _safe_float(latest.get("close"))
+        ema50 = _safe_float(latest.get("EMA50"))
+        if close > ema50 and ema50 > 0:
+            above_ema50 += 1
+            
+        # Adv/Dec
+        if len(df) > 1:
+            prev_close = _safe_float(df["close"].iloc[-2])
+            curr_close = _safe_float(df["close"].iloc[-1])
+            if curr_close > prev_close:
+                advances += 1
+            elif curr_close < prev_close:
+                declines += 1
+        
+        # 52W High/Low
+        high_52w = _safe_float(latest.get("HIGH_52W"))
+        if high_52w > 0:
+            if close >= high_52w * 0.995:
+                new_highs += 1
+        # New low (approx)
+        if len(df) >= 252:
+            low_52w = df["low"].tail(252).min()
+            low_52w = _safe_float(low_52w)
+            if low_52w > 0 and close <= low_52w * 1.005:
+                new_lows += 1
+
+    return {
+        "PCT_ABOVE_EMA50": (above_ema50 / total * 100) if total > 0 else 50.0,
+        "ADV_DECLINE_RATIO": (advances / max(declines, 1)) if total > 0 else 1.0,
+        "NEW_HIGHS_52W": new_highs,
+        "NEW_LOWS_52W": new_lows
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MARKET REGIME DICT  (pass directly to classify_market_regime())
+# ─────────────────────────────────────────────────────────────────────────────
+
+_REGIME_CACHE: dict = {}
+_REGIME_CACHE_TS: float = 0.0
+
+def get_market_regime_dict(breadth_data: Optional[dict] = None) -> dict:
     """
     Build the market dict required by classify_market_regime() in scoring_engine.
-    Call once per scan run and reuse across all stocks.
-
-    Fields sourced from live data:
-      NIFTY_CLOSE, NIFTY_EMA20, NIFTY_EMA50, NIFTY_EMA200  — from ^NSEI
-      INDIAVIX, INDIAVIX_EMA10                               — from ^INDIAVIX
-
-    Fields set to neutral defaults (TODO: compute from universe):
-      PCT_ABOVE_EMA50, ADV_DECLINE_RATIO, NEW_HIGHS_52W, NEW_LOWS_52W
     """
+    global _REGIME_CACHE, _REGIME_CACHE_TS
+    
+    now = time_module.time()
+    # Cache regime for 5 minutes (to allow breadth updates within same scan but prevent spamming YF)
+    if not breadth_data and _REGIME_CACHE and (now - _REGIME_CACHE_TS < 300):
+        return _REGIME_CACHE
+
     from app.indicator_engine import get_nifty_data
     import pandas_ta as ta
 
     # ── Nifty ─────────────────────────────────────────────────────
     nifty_df = get_nifty_data()
     if nifty_df is None or nifty_df.empty:
-        # Return safe neutral fallback — caller will get CHOPPY_BULL regime
         return {
             "NIFTY_CLOSE":       0.0,
             "NIFTY_EMA20":       0.0,
@@ -208,7 +281,7 @@ def get_market_regime_dict() -> dict:
             "NEW_LOWS_52W":      0,
         }
 
-    # EMA200 on Nifty (indicator_engine only stores EMA20 + EMA50)
+    # EMA200 on Nifty
     nifty_ema200 = float(
         ta.ema(nifty_df["close"], length=200).iloc[-1]
     ) if len(nifty_df) >= 200 else float(nifty_df["close"].iloc[-1])
@@ -221,22 +294,29 @@ def get_market_regime_dict() -> dict:
         vix_close  = float(vix_df["close"].iloc[-1])
         vix_ema10  = float(vix_df["EMA10"].iloc[-1])
     else:
-        vix_close  = 15.0   # neutral fallback
+        vix_close  = 15.0
         vix_ema10  = 15.0
 
-    return {
+    # ── Breadth ───────────────────────────────────────────────────
+    if not breadth_data:
+        breadth_data = {
+            "PCT_ABOVE_EMA50":   50.0,
+            "ADV_DECLINE_RATIO": 1.0,
+            "NEW_HIGHS_52W":     0,
+            "NEW_LOWS_52W":      0,
+        }
+
+    res = {
         "NIFTY_CLOSE":       float(nifty_latest["close"]),
         "NIFTY_EMA20":       float(nifty_latest["EMA20"]),
         "NIFTY_EMA50":       float(nifty_latest["EMA50"]),
         "NIFTY_EMA200":      nifty_ema200,
         "INDIAVIX":          vix_close,
         "INDIAVIX_EMA10":    vix_ema10,
-        # ── Cross-sectional fields (need full Nifty 200 universe) ──
-        # TODO: compute PCT_ABOVE_EMA50 by looping all N200 stocks
-        # TODO: fetch ADV_DECLINE_RATIO from NSE bhav copy
-        # TODO: count NEW_HIGHS_52W / NEW_LOWS_52W from universe
-        "PCT_ABOVE_EMA50":   50.0,
-        "ADV_DECLINE_RATIO": 1.0,
-        "NEW_HIGHS_52W":     0,
-        "NEW_LOWS_52W":      0,
+        **breadth_data
     }
+    
+    _REGIME_CACHE = res
+    _REGIME_CACHE_TS = now
+    return res
+

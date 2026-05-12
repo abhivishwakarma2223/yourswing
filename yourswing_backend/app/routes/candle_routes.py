@@ -155,6 +155,9 @@ def get_stock_analysis(symbol: str, db: Session = Depends(get_db)):
         "breakout": analysis["breakout"],
         "signal": analysis["signal"],
         "score": analysis.get("score", 0.0),
+        "regime": analysis.get("regime", "UNKNOWN"),
+        "regime_multiplier": analysis.get("regime_multiplier", 1.0),
+        "components": analysis.get("components", {}),
         "indicators": {
             "RSI": {"value": analysis["rsi"] if analysis["rsi"] else "N/A"},
             "EMA20": {"value": analysis["ema20"] if analysis["ema20"] else "N/A"},
