@@ -1,22 +1,28 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 import 'theme/app_theme.dart';
 import 'screens/main_navigation_screen.dart';
+import 'providers/portfolio_provider.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   
-  // Set system UI overlay style for premium feel
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
       statusBarIconBrightness: Brightness.light,
-      systemNavigationBarColor: Color(0xFF020617), // Deep slate bottom
+      systemNavigationBarColor: Color(0xFF020617),
       systemNavigationBarIconBrightness: Brightness.light,
     ),
   );
 
-  runApp(const YourSwingApp());
+  runApp(
+    ChangeNotifierProvider(
+      create: (_) => PortfolioProvider(),
+      child: const YourSwingApp(),
+    ),
+  );
 }
 
 class YourSwingApp extends StatelessWidget {

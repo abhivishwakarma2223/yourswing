@@ -2,12 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/premium_card.dart';
 import '../widgets/custom_button.dart';
 import '../services/api_service.dart';
-import '../services/portfolio_service.dart';
 import '../models/portfolio_item.dart';
+import '../providers/portfolio_provider.dart';
 import 'search_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -18,207 +19,176 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
-  final PortfolioService _portfolioService = PortfolioService();
   List<Map<String, dynamic>> trending = [];
-  List<PortfolioItem> _holdings = [];
-  Map<String, Map<String, double>> _livePrices = {};
-  bool _isLoading = true;
+  bool _isTrendingLoading = true;
 
   @override
   void initState() {
     super.initState();
-    _loadData();
+    _loadTrending();
+    // Initial portfolio load is handled by Provider constructor
   }
 
-  Future<void> _loadData() async {
-    setState(() => _isLoading = true);
-    
-    // 1. Load Trending Stocks
-    final trendingData = await apiService.getTrendingStocks();
-    
-    // 2. Load Portfolio Holdings
-    final holdingsData = await _portfolioService.getPortfolio();
-    
-    // 3. Fetch Live Prices for Holdings (Normalized)
-    Map<String, Map<String, double>> prices = {};
-    if (holdingsData.isNotEmpty) {
-      final symbols = holdingsData.map((e) {
-        String sym = e.symbol.toUpperCase();
-        return sym.contains('.') ? sym : '$sym.NS';
-      }).toList();
-      prices = await apiService.fetchLatestPrices(symbols);
-    }
-
+  Future<void> _loadTrending() async {
+    setState(() => _isTrendingLoading = true);
+    final data = await apiService.getTrendingStocks();
     setState(() {
-      trending = trendingData;
-      _holdings = holdingsData;
-      _livePrices = prices;
-      _isLoading = false;
+      trending = data;
+      _isTrendingLoading = false;
     });
   }
 
-  Map<String, double> _calculateStats() {
-    double totalValue = 0;
-    double totalInvestment = 0;
-    for (var item in _holdings) {
-      String symbol = item.symbol.toUpperCase();
-      if (!symbol.contains('.')) symbol = '$symbol.NS';
-      
-      final stockData = _livePrices[symbol];
-      double currentPrice = item.averagePrice;
-      
-      if (stockData != null && (stockData['price'] ?? 0) > 0) {
-        currentPrice = stockData['price']!;
-      }
-      
-      totalValue += currentPrice * item.quantity;
-      totalInvestment += item.averagePrice * item.quantity;
-    }
-    double pnl = totalValue - totalInvestment;
-    double pnlPercent = totalInvestment > 0 ? (pnl / totalInvestment) * 100 : 0;
-    return {'total': totalValue, 'pnl': pnl, 'percent': pnlPercent};
+  Future<void> _refreshAll() async {
+    await Future.wait([
+      _loadTrending(),
+      context.read<PortfolioProvider>().loadPortfolio(),
+    ]);
   }
 
   @override
   Widget build(BuildContext context) {
-    final stats = _calculateStats();
+    return Consumer<PortfolioProvider>(
+      builder: (context, portfolio, child) {
+        final stats = portfolio.getSummary();
 
-    return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          colors: [AppTheme.background, AppTheme.backgroundDarker],
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-        ),
-      ),
-      child: Scaffold(
-        backgroundColor: Colors.transparent,
-        body: SafeArea(
-          child: RefreshIndicator(
-            onRefresh: _loadData,
-            color: AppTheme.primaryLight,
-            backgroundColor: const Color(0xFF111827),
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(24),
-              physics: const AlwaysScrollableScrollPhysics(),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Header
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        return Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              colors: [AppTheme.background, AppTheme.backgroundDarker],
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+            ),
+          ),
+          child: Scaffold(
+            backgroundColor: Colors.transparent,
+            body: SafeArea(
+              child: RefreshIndicator(
+                onRefresh: _refreshAll,
+                color: AppTheme.primaryLight,
+                backgroundColor: const Color(0xFF111827),
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(24),
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Welcome back,',
-                              style: GoogleFonts.outfit(
-                                color: Colors.white.withOpacity(0.5),
-                                fontSize: 14,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                            Text(
-                              'Abhivishwakarma',
-                              style: GoogleFonts.outfit(
-                                color: Colors.white,
-                                fontSize: 26,
-                                fontWeight: FontWeight.bold,
-                                letterSpacing: -0.5,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Stack(
+                      // Header
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Container(
-                            width: 52,
-                            height: 52,
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                colors: [
-                                  AppTheme.primaryLight.withOpacity(0.2),
-                                  AppTheme.primaryLight.withOpacity(0.05),
-                                ],
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                              ),
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: AppTheme.primaryLight.withOpacity(0.2),
-                                width: 1.5,
-                              ),
-                            ),
-                            child: const Icon(
-                              LucideIcons.user,
-                              color: AppTheme.primaryLight,
-                              size: 24,
-                            ),
-                          ),
-                          Positioned(
-                            right: 2,
-                            top: 2,
-                            child: Container(
-                              width: 12,
-                              height: 12,
-                              decoration: BoxDecoration(
-                                color: AppTheme.primaryLight,
-                                shape: BoxShape.circle,
-                                border: Border.all(color: AppTheme.background, width: 2),
-                              ),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Welcome back,',
+                                  style: GoogleFonts.outfit(
+                                    color: Colors.white.withOpacity(0.5),
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                                Text(
+                                  'Abhivishwakarma',
+                                  style: GoogleFonts.outfit(
+                                    color: Colors.white,
+                                    fontSize: 26,
+                                    fontWeight: FontWeight.bold,
+                                    letterSpacing: -0.5,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
+                          Stack(
+                            children: [
+                              Container(
+                                width: 52,
+                                height: 52,
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    colors: [
+                                      AppTheme.primaryLight.withOpacity(0.2),
+                                      AppTheme.primaryLight.withOpacity(0.05),
+                                    ],
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                  ),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: AppTheme.primaryLight.withOpacity(0.2),
+                                    width: 1.5,
+                                  ),
+                                ),
+                                child: const Icon(
+                                  LucideIcons.user,
+                                  color: AppTheme.primaryLight,
+                                  size: 24,
+                                ),
+                              ),
+                              Positioned(
+                                right: 2,
+                                top: 2,
+                                child: Container(
+                                  width: 12,
+                                  height: 12,
+                                  decoration: BoxDecoration(
+                                    color: AppTheme.primaryLight,
+                                    shape: BoxShape.circle,
+                                    border: Border.all(color: AppTheme.background, width: 2),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          )
                         ],
-                      )
+                      ).animate().fade().slideY(begin: -0.2),
+
+                      const SizedBox(height: 32),
+
+                      // Portfolio Summary Card (Now Dynamic)
+                      _buildDynamicSummaryCard(stats, portfolio.isLoading),
+
+                      const SizedBox(height: 32),
+
+                      // CTA
+                      CustomButton(
+                        text: 'Search ',
+                        icon: LucideIcons.search,
+                        onPressed: () async {
+                          await Navigator.push(
+                            context,
+                            MaterialPageRoute(builder: (_) => const SearchScreen()),
+                          );
+                          // No need to manually refresh, Provider will be updated if search screen modifies portfolio
+                        },
+                      ).animate().fade(delay: 200.ms).scale(),
+
+                      const SizedBox(height: 32),
+
+                      // Trending Section
+                      Text(
+                        'Trending Now',
+                        style: GoogleFonts.outfit(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+                      ).animate().fade(delay: 300.ms),
+                      const SizedBox(height: 16),
+
+                      if (_isTrendingLoading)
+                        const Center(child: CircularProgressIndicator(color: AppTheme.primaryLight))
+                      else
+                        ...trending.map((stock) => _buildTrendingTile(stock)),
                     ],
-                  ).animate().fade().slideY(begin: -0.2),
-
-                  const SizedBox(height: 32),
-
-                  // Portfolio Summary Card (Now Dynamic)
-                  _buildDynamicSummaryCard(stats),
-
-                  const SizedBox(height: 32),
-
-                  // CTA
-                  CustomButton(
-                    text: 'Search ',
-                    icon: LucideIcons.search,
-                    onPressed: () async {
-                      await Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (_) => const SearchScreen()),
-                      );
-                      _loadData(); // Refresh data after returning
-                    },
-                  ).animate().fade(delay: 200.ms).scale(),
-
-                  const SizedBox(height: 32),
-
-                  // Trending Section
-                  Text(
-                    'Trending Now',
-                    style: GoogleFonts.outfit(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
-                  ).animate().fade(delay: 300.ms),
-                  const SizedBox(height: 16),
-
-                  if (_isLoading)
-                    const Center(child: CircularProgressIndicator(color: AppTheme.primaryLight))
-                  else
-                    ...trending.map((stock) => _buildTrendingTile(stock)),
-                ],
+                  ),
+                ),
               ),
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
-  Widget _buildDynamicSummaryCard(Map<String, double> stats) {
+  Widget _buildDynamicSummaryCard(Map<String, double> stats, bool isPortfolioLoading) {
     bool isProfit = stats['pnl']! >= 0;
     return Container(
       decoration: BoxDecoration(
@@ -292,8 +262,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         visualDensity: VisualDensity.compact,
                         padding: const EdgeInsets.all(4),
                         constraints: const BoxConstraints(),
-                        icon: Icon(LucideIcons.refreshCw, color: Colors.white.withOpacity(0.4), size: 16),
-                        onPressed: _loadData,
+                        icon: isPortfolioLoading 
+                            ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                            : Icon(LucideIcons.refreshCw, color: Colors.white.withOpacity(0.4), size: 16),
+                        onPressed: _refreshAll,
                       ),
                     ),
                   ],

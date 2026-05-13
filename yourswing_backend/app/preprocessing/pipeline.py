@@ -72,8 +72,12 @@ def run_preprocessing_pipeline(
 
         # 6. Additional Flags for master scorer
         # HIGHER_HIGH, HIGHER_LOW (calculated over last 10 days)
-        df["HIGHER_HIGH"] = df["high"].iloc[-1] > df["high"].iloc[-10]
-        df["HIGHER_LOW"] = df["low"].iloc[-1] > df["low"].iloc[-10]
+        if len(df) >= 10:
+            df["HIGHER_HIGH"] = df["high"].iloc[-1] > df["high"].iloc[-10]
+            df["HIGHER_LOW"] = df["low"].iloc[-1] > df["low"].iloc[-10]
+        else:
+            df["HIGHER_HIGH"] = False
+            df["HIGHER_LOW"] = False
         
         # SWING_RANGE_PCT (average high-low range)
         df["SWING_RANGE_PCT"] = ((df["high"] - df["low"]) / df["close"] * 100).rolling(20).mean()

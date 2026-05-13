@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import '../models/portfolio_item.dart';
-import '../services/portfolio_service.dart';
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
+import '../providers/portfolio_provider.dart';
 import 'search_screen.dart';
 
 class PortfolioScreen extends StatefulWidget {
@@ -15,36 +16,10 @@ class PortfolioScreen extends StatefulWidget {
 }
 
 class _PortfolioScreenState extends State<PortfolioScreen> {
-  final PortfolioService _portfolioService = PortfolioService();
-  List<PortfolioItem> _holdings = [];
-  Map<String, Map<String, double>> _liveData = {};
-  bool _isLoading = true;
-
   @override
   void initState() {
     super.initState();
-    _loadPortfolio();
-  }
-
-  Future<void> _loadPortfolio() async {
-    setState(() => _isLoading = true);
-
-    // 1. Load holdings from local storage
-    final data = await _portfolioService.getPortfolio();
-    _holdings = data;
-
-    // 2. Fetch live prices for normalized symbols
-    if (_holdings.isNotEmpty) {
-      // Ensure we request symbols with .NS suffix for matching
-      final symbols = _holdings.map((e) {
-        String sym = e.symbol.toUpperCase();
-        return sym.contains('.') ? sym : '$sym.NS';
-      }).toList();
-
-      _liveData = await apiService.fetchLatestPrices(symbols);
-    }
-
-    setState(() => _isLoading = false);
+    // Portfolio loading is handled by the Provider
   }
 
   void _showAddEditModal({PortfolioItem? item}) {
@@ -155,9 +130,10 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
                       averagePrice: double.tryParse(priceController.text) ?? 0,
                     );
 
-                    await _portfolioService.saveStock(newItem);
-                    _loadPortfolio();
-                    Navigator.pop(context);
+                    // Save via Provider
+                    final provider = context.read<PortfolioProvider>();
+                    await provider.saveStock(newItem);
+                    if (mounted) Navigator.pop(context);
                   },
                   child: Text(
                     item == null ? 'SAVE TO PORTFOLIO' : 'UPDATE HOLDING',
@@ -220,80 +196,62 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
   }
 
   // ── Summary numbers ─────────────────────────────────────────────────────────
-  Map<String, double> _calcSummary() {
-    double totalInvested = 0;
-    double totalCurrent = 0;
-
-    for (final item in _holdings) {
-      String lookupSymbol = item.symbol.toUpperCase();
-      if (!lookupSymbol.contains('.')) lookupSymbol = '$lookupSymbol.NS';
-      final stockData = _liveData[lookupSymbol];
-      double currentPrice = item.averagePrice;
-      if (stockData != null && (stockData['price'] ?? 0) > 0) {
-        currentPrice = stockData['price']!;
-      }
-      totalInvested += item.averagePrice * item.quantity;
-      totalCurrent += currentPrice * item.quantity;
-    }
-
-    final totalPnl = totalCurrent - totalInvested;
-    final totalPnlPct = totalInvested > 0 ? (totalPnl / totalInvested) * 100 : 0.0;
-    return {
-      'invested': totalInvested,
-      'current': totalCurrent,
-      'pnl': totalPnl,
-      'pnlPct': totalPnlPct,
-    };
-  }
+  // Summary logic moved to PortfolioProvider
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          colors: [AppTheme.background, AppTheme.backgroundDarker],
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-        ),
-      ),
-      child: Scaffold(
-        backgroundColor: Colors.transparent,
-        appBar: AppBar(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          toolbarHeight: 64,
-          title: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'My Portfolio',
-                style: GoogleFonts.outfit(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 22,
-                ),
-              ),
-              Text(
-                '${_holdings.length} holding${_holdings.length == 1 ? '' : 's'}',
-                style: GoogleFonts.outfit(
-                  color: Colors.white38,
-                  fontSize: 12,
-                ),
-              ),
-            ],
+    return Consumer<PortfolioProvider>(
+      builder: (context, portfolio, child) {
+        final holdings = portfolio.holdings;
+        
+        return Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              colors: [AppTheme.background, AppTheme.backgroundDarker],
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+            ),
           ),
-          actions: [
-            _buildIconBtn(LucideIcons.refreshCw, _loadPortfolio),
-            const SizedBox(width: 12),
-          ],
-        ),
-        body: _isLoading
-            ? _buildLoadingState()
-            : _holdings.isEmpty
-                ? _buildEmptyState()
-                : _buildBody(),
-        floatingActionButton: _buildFAB(),
-      ),
+          child: Scaffold(
+            backgroundColor: Colors.transparent,
+            appBar: AppBar(
+              backgroundColor: Colors.transparent,
+              elevation: 0,
+              toolbarHeight: 64,
+              title: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'My Portfolio',
+                    style: GoogleFonts.outfit(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 22,
+                    ),
+                  ),
+                  Text(
+                    '${holdings.length} holding${holdings.length == 1 ? '' : 's'}',
+                    style: GoogleFonts.outfit(
+                      color: Colors.white38,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                _buildIconBtn(LucideIcons.refreshCw, portfolio.loadPortfolio),
+                const SizedBox(width: 12),
+              ],
+            ),
+            body: portfolio.isLoading
+                ? _buildLoadingState()
+                : holdings.isEmpty
+                    ? _buildEmptyState()
+                    : _buildBody(portfolio),
+            floatingActionButton: _buildFAB(),
+          ),
+        );
+      },
     );
   }
 
@@ -355,8 +313,10 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
     );
   }
 
-  Widget _buildBody() {
-    final summary = _calcSummary();
+  Widget _buildBody(PortfolioProvider portfolio) {
+    final holdings = portfolio.holdings;
+    final livePrices = portfolio.livePrices;
+    final summary = portfolio.getSummary();
     final isOverallProfit = (summary['pnl'] ?? 0) >= 0;
 
     return CustomScrollView(
@@ -371,8 +331,8 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
           sliver: SliverList(
             delegate: SliverChildBuilderDelegate(
-              (context, index) => _buildHoldingTile(_holdings[index]),
-              childCount: _holdings.length,
+              (context, index) => _buildHoldingTile(holdings[index], livePrices),
+              childCount: holdings.length,
             ),
           ),
         ),
@@ -498,21 +458,26 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
     );
   }
 
-  Widget _buildHoldingTile(PortfolioItem item) {
+  Widget _buildHoldingTile(PortfolioItem item, Map<String, Map<String, double>> liveData) {
     // ── Logic untouched ──────────────────────────────────────────────────────
     String lookupSymbol = item.symbol.toUpperCase();
     if (!lookupSymbol.contains('.')) lookupSymbol = '$lookupSymbol.NS';
 
-    final stockData = _liveData[lookupSymbol];
+    final stockData = liveData[lookupSymbol];
     double currentPrice = item.averagePrice;
     double dailyChangePrice = 0.0;
     double dailyChangePercent = 0.0;
 
     bool hasLivePrice = stockData != null && (stockData['price'] ?? 0) > 0;
+    bool isStale = !hasLivePrice;
+
     if (hasLivePrice) {
       currentPrice = stockData['price']!;
-      dailyChangePrice = stockData['change'] ?? 0.0;
+      dailyChangePrice = (stockData['change'] ?? 0.0) * item.quantity;
       dailyChangePercent = stockData['changePercent'] ?? 0.0;
+    } else {
+      // Fallback: If no live price, use average price as current to show 0% change
+      currentPrice = item.averagePrice;
     }
 
     double totalPnl = (currentPrice - item.averagePrice) * item.quantity;
@@ -579,13 +544,52 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        displaySymbol,
-                        style: GoogleFonts.outfit(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
-                        ),
+                      Row(
+                        children: [
+                          Text(
+                            displaySymbol,
+                            style: GoogleFonts.outfit(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          if (hasLivePrice)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                              decoration: BoxDecoration(
+                                color: AppTheme.signalBuy.withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(4),
+                                border: Border.all(color: AppTheme.signalBuy.withOpacity(0.2), width: 0.5),
+                              ),
+                              child: Text(
+                                'LIVE',
+                                style: GoogleFonts.outfit(
+                                  color: AppTheme.signalBuy,
+                                  fontSize: 7,
+                                  fontWeight: FontWeight.w900,
+                                  letterSpacing: 0.5,
+                                ),
+                              ),
+                            )
+                          else
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.05),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                'OFFLINE',
+                                style: GoogleFonts.outfit(
+                                  color: Colors.white.withOpacity(0.2),
+                                  fontSize: 7,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
                       const SizedBox(height: 2),
                       Text(
@@ -641,8 +645,7 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
                     if (value == 'edit') {
                       _showAddEditModal(item: item);
                     } else if (value == 'delete') {
-                      await _portfolioService.deleteStock(item.symbol);
-                      _loadPortfolio();
+                      context.read<PortfolioProvider>().deleteStock(item.symbol);
                     }
                   },
                   itemBuilder: (context) => [

@@ -82,31 +82,80 @@ def fetch_all_active_stock_candles():
 
 def fetch_batch_prices(symbols: List[str]) -> Dict:
     """
-    ULTRA-FAST BATCH FETCH: Uses one single network request for all symbols.
-    Handles MultiIndex format for both single and multiple tickers.
+    SMART BATCH FETCH: 
+    1. Checks live_market_state (hybrid cache) for data.
+    2. Fetches remaining from yfinance.
     """
     if not symbols: return {}
-    original_symbols = symbols
-    normalized_symbols = [s.upper() for s in original_symbols]
     
+    results = {}
+    remaining_symbols = []
+    
+    # 1. Try to get from our hybrid cache first
     try:
-        # group_by='ticker' ALWAYS returns MultiIndex, even for 1 symbol
-        data = yf.download(normalized_symbols, period="7d", interval="1d", progress=False, group_by='ticker')
-        results = {}
+        from app.database import engine
+        with engine.connect() as conn:
+            # Normalize to uppercase for DB lookup
+            upper_symbols = [s.upper() for s in symbols]
+            query = text("SELECT symbol, live_price, live_change, live_change_pct FROM live_market_state WHERE symbol = ANY(:symbols)")
+            cache_rows = conn.execute(query, {"symbols": upper_symbols}).mappings().all()
+            
+            cache_map = {r["symbol"]: r for r in cache_rows}
+            
+            for orig in symbols:
+                s_upper = orig.upper()
+                if s_upper in cache_map:
+                    row = cache_map[s_upper]
+                    results[orig] = {
+                        "price": float(row["live_price"]),
+                        "change": float(row["live_change"] or 0.0),
+                        "changePercent": float(row["live_change_pct"] or 0.0)
+                    }
+                else:
+                    remaining_symbols.append(orig)
+    except Exception as e:
+        print(f"Cache lookup failed: {e}")
+        remaining_symbols = symbols
+
+    if not remaining_symbols:
+        return results
+
+    # 2. Fetch remaining from yfinance
+    try:
+        data = yf.download(remaining_symbols, period="7d", interval="1d", progress=False, group_by='ticker')
         
-        for i, s in enumerate(normalized_symbols):
-            orig = original_symbols[i]
+        for orig in remaining_symbols:
             try:
-                # IMPORTANT: In group_by='ticker' mode, ticker is always the top level key
-                stock_data = data[s]
+                s_upper = orig.upper()
                 
+                # Robust extraction: handle both MultiIndex and single level index
+                if isinstance(data.columns, pd.MultiIndex):
+                    if s_upper in data.columns.levels[0]:
+                        stock_data = data[s_upper]
+                    else:
+                        # Sometimes it might not be in levels but still accessible
+                        try:
+                            stock_data = data[s_upper]
+                        except:
+                            results[orig] = {"price": 0.0, "change": 0.0, "changePercent": 0.0}
+                            continue
+                else:
+                    # Single symbol might return flat columns if yfinance decides so
+                    stock_data = data
+
                 if stock_data is None or stock_data.empty:
-                    results[orig] = {"price": 0.0, "changePercent": 0.0}
+                    results[orig] = {"price": 0.0, "change": 0.0, "changePercent": 0.0}
                     continue
-                    
-                close_series = stock_data['Close'].dropna()
+                
+                # Use 'Close' or 'Adj Close'
+                col = 'Close' if 'Close' in stock_data.columns else 'Adj Close'
+                if col not in stock_data.columns:
+                    results[orig] = {"price": 0.0, "change": 0.0, "changePercent": 0.0}
+                    continue
+
+                close_series = stock_data[col].dropna()
                 if close_series.empty:
-                    results[orig] = {"price": 0.0, "changePercent": 0.0}
+                    results[orig] = {"price": 0.0, "change": 0.0, "changePercent": 0.0}
                     continue
                 
                 price = float(close_series.iloc[-1])
@@ -114,15 +163,19 @@ def fetch_batch_prices(symbols: List[str]) -> Dict:
                 
                 results[orig] = {
                     "price": round(price, 2),
+                    "change": round(price - prev_close, 2),
                     "changePercent": round(((price - prev_close) / prev_close) * 100, 2) if prev_close > 0 else 0.0
                 }
             except Exception as e:
                 print(f"Error processing {orig}: {e}")
-                results[orig] = {"price": 0.0, "changePercent": 0.0}
-        return results
+                results[orig] = {"price": 0.0, "change": 0.0, "changePercent": 0.0}
     except Exception as e:
         print(f"Bulk Fetch Error: {e}")
-        return {s: {"price": 0.0, "changePercent": 0.0} for s in original_symbols}
+        for s in remaining_symbols:
+            if s not in results:
+                results[s] = {"price": 0.0, "change": 0.0, "changePercent": 0.0}
+                
+    return results
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -236,12 +289,29 @@ def compute_market_breadth(candles_by_symbol: Dict[str, pd.DataFrame]) -> dict:
             if low_52w > 0 and close <= low_52w * 1.005:
                 new_lows += 1
 
-    return {
+    res = {
         "PCT_ABOVE_EMA50": (above_ema50 / total * 100) if total > 0 else 50.0,
         "ADV_DECLINE_RATIO": (advances / max(declines, 1)) if total > 0 else 1.0,
         "NEW_HIGHS_52W": new_highs,
         "NEW_LOWS_52W": new_lows
     }
+    
+    # NEW: Persist to DB for cross-process consistency
+    try:
+        import json
+        from sqlalchemy import text
+        from app.database import engine
+        with engine.connect() as conn:
+            conn.execute(
+                text("INSERT INTO market_stats (key, value, updated_at) VALUES ('latest_breadth', :val, CURRENT_TIMESTAMP) "
+                     "ON CONFLICT (key) DO UPDATE SET value = :val, updated_at = CURRENT_TIMESTAMP"),
+                {"val": json.dumps(res)}
+            )
+            conn.commit()
+    except Exception as e:
+        print(f"Failed to persist market stats: {e}")
+
+    return res
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -298,6 +368,19 @@ def get_market_regime_dict(breadth_data: Optional[dict] = None) -> dict:
         vix_ema10  = 15.0
 
     # ── Breadth ───────────────────────────────────────────────────
+    if not breadth_data:
+        # NEW: Try to load from DB first
+        try:
+            import json
+            from sqlalchemy import text
+            from app.database import engine
+            with engine.connect() as conn:
+                row = conn.execute(text("SELECT value FROM market_stats WHERE key = 'latest_breadth'")).fetchone()
+                if row:
+                    breadth_data = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+        except Exception as e:
+            print(f"Failed to load cached market stats: {e}")
+
     if not breadth_data:
         breadth_data = {
             "PCT_ABOVE_EMA50":   50.0,

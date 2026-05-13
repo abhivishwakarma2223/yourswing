@@ -39,6 +39,7 @@ dependencies:
   flutter_animate: ^4.5.2
   lucide_icons: ^0.257.0
   shared_preferences: ^2.2.1
+  provider: ^6.1.5+1
 
 dev_dependencies:
   flutter_test:

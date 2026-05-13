@@ -69,7 +69,7 @@ def get_candles_dataframe(db, stock_id):
 
 import math
 
-def get_latest_analysis(db, stock_id):
+def get_latest_analysis(db, stock_id, live_price=None):
     from app.indicator_engine import calculate_indicators
     from app.scoring_engine import score_stock
     from app.preprocessing.pipeline import run_preprocessing_pipeline
@@ -93,7 +93,14 @@ def get_latest_analysis(db, stock_id):
     # Run full institutional pipeline
     df = run_preprocessing_pipeline(symbol, df)
     
-    latest_row = df.iloc[-1]
+    latest_row = df.iloc[-1].to_dict()
+    
+    # NEW: If live price is provided, update the latest row before scoring
+    if live_price is not None and live_price > 0:
+        latest_row['close'] = live_price
+        # Optional: update other price-dependent indicators if necessary, 
+        # but most scoring logic uses 'close' or 'price'
+        latest_row['price'] = live_price
 
     def clean_val(v):
         try:
@@ -104,7 +111,7 @@ def get_latest_analysis(db, stock_id):
         except (TypeError, ValueError):
             return 0.0
 
-    score_result = score_stock(latest_row.to_dict(), market=market)
+    score_result = score_stock(latest_row, market=market)
     score = score_result["final_score"]
     signal = score_result["signal"]
 
@@ -138,18 +145,18 @@ def get_latest_analysis(db, stock_id):
 def analyze_stock_with_live_price(db: Session, stock_id: int):
     from app.market_api import get_live_price
     
-    analysis = get_latest_analysis(db, stock_id)
-    if not analysis:
-        return None
-        
     stock = db.query(Stock).filter(Stock.id == stock_id).first()
     if not stock:
         return None
         
-    import math
     price_info = get_live_price(stock.symbol)
     live_price = price_info["live_price"]
     previous_close = price_info["previous_close"]
+
+    # Re-calculate analysis with the LIVE price
+    analysis = get_latest_analysis(db, stock_id, live_price=live_price)
+    if not analysis:
+        return None
     
     if math.isnan(live_price):
         live_price = 0.0
@@ -186,16 +193,30 @@ def analyze_stock_with_live_price(db: Session, stock_id: int):
 
 
 def get_candle(db: Session, candle_id: int) -> Optional[Candle]:
-    pass
+    return db.query(Candle).filter(Candle.id == candle_id).first()
 
 def get_candles(db: Session, symbol: str, skip: int = 0, limit: int = 100) -> List[Candle]:
-    pass
+    stock = get_stock_by_symbol(db, symbol)
+    if not stock:
+        return []
+    return db.query(Candle).filter(
+        Candle.stock_id == stock.id
+    ).order_by(desc(Candle.candle_time)).offset(skip).limit(limit).all()
 
 def create_candle(db: Session, candle: CandleCreate) -> Candle:
-    pass
+    db_candle = Candle(**candle.model_dump())
+    db.add(db_candle)
+    db.commit()
+    db.refresh(db_candle)
+    return db_candle
 
 def delete_candle(db: Session, candle_id: int) -> bool:
-    pass
+    db_candle = get_candle(db, candle_id)
+    if db_candle:
+        db.delete(db_candle)
+        db.commit()
+        return True
+    return False
 
 def get_stock_by_symbol(db: Session, symbol: str) -> Optional[Stock]:
     return db.query(Stock).filter(Stock.symbol == symbol).first()
