@@ -76,17 +76,17 @@ async def lifespan(app: FastAPI):
     # 2. Start Scheduler
     scheduler = BackgroundScheduler(timezone=IST)
     
-    # Daily Snapshot at 4:05 PM IST
+    # Daily Snapshot at 8:00 PM IST
     scheduler.add_job(
         _job_daily_snapshot,
-        CronTrigger(hour=16, minute=5, day_of_week='mon-fri', timezone=IST),
+        CronTrigger(hour=20, minute=0, day_of_week='mon-fri', timezone=IST),
         id="daily_snapshot"
     )
     
-    # Live Update every 60s
+    # Live Update every minute during market hours (Mon-Fri, 9:00 AM - 4:00 PM IST)
     scheduler.add_job(
         _job_live_update,
-        IntervalTrigger(seconds=60),
+        CronTrigger(day_of_week='mon-fri', hour='9-15', minute='*', timezone=IST),
         id="live_update"
     )
     

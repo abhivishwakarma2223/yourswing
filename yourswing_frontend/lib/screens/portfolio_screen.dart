@@ -16,6 +16,16 @@ class PortfolioScreen extends StatefulWidget {
 }
 
 class _PortfolioScreenState extends State<PortfolioScreen> {
+  bool _isMarketOpen() {
+    final now = DateTime.now().toUtc().add(const Duration(hours: 5, minutes: 30));
+    if (now.weekday == DateTime.saturday || now.weekday == DateTime.sunday) {
+      return false;
+    }
+    final startTime = DateTime(now.year, now.month, now.day, 9, 15);
+    final endTime = DateTime(now.year, now.month, now.day, 15, 30);
+    return now.isAfter(startTime) && now.isBefore(endTime);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -345,7 +355,10 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
     final pnlPct = summary['pnlPct'] ?? 0;
     final current = summary['current'] ?? 0;
     final invested = summary['invested'] ?? 0;
+    final dailyChange = summary['dailyChange'] ?? 0;
+    final isDailyUp = dailyChange >= 0;
     final pnlColor = isOverallProfit ? AppTheme.signalBuy : AppTheme.signalAvoid;
+    final dailyColor = isDailyUp ? AppTheme.signalBuy : AppTheme.signalAvoid;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
@@ -400,14 +413,51 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
             ],
           ),
           const SizedBox(height: 6),
-          Text(
-            '₹${current.toStringAsFixed(2)}',
-            style: GoogleFonts.outfit(
-              color: Colors.white,
-              fontSize: 30,
-              fontWeight: FontWeight.bold,
-              letterSpacing: -0.5,
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              '₹${current.toStringAsFixed(2)}',
+              style: GoogleFonts.outfit(
+                color: Colors.white,
+                fontSize: 30,
+                fontWeight: FontWeight.bold,
+                letterSpacing: -0.5,
+              ),
             ),
+          ),
+          const SizedBox(height: 8),
+          // Today's total change pill
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: dailyColor.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: dailyColor.withOpacity(0.18), width: 0.5),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      isDailyUp ? LucideIcons.arrowUpRight : LucideIcons.arrowDownRight,
+                      color: dailyColor,
+                      size: 13,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Today  ${isDailyUp ? '+' : '-'}₹${dailyChange.abs().toStringAsFixed(2)}',
+                      style: GoogleFonts.outfit(
+                        color: dailyColor,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 16),
           Container(height: 1, color: Colors.white.withOpacity(0.05)),
@@ -446,12 +496,16 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
           style: GoogleFonts.outfit(color: Colors.white24, fontSize: 11, letterSpacing: 0.2),
         ),
         const SizedBox(height: 3),
-        Text(
-          value,
-          style: GoogleFonts.outfit(
-            color: valueColor,
-            fontSize: 15,
-            fontWeight: FontWeight.w700,
+        FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: align == TextAlign.right ? Alignment.centerRight : Alignment.centerLeft,
+          child: Text(
+            value,
+            style: GoogleFonts.outfit(
+              color: valueColor,
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+            ),
           ),
         ),
       ],
@@ -546,16 +600,19 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
                     children: [
                       Row(
                         children: [
-                          Text(
-                            displaySymbol,
-                            style: GoogleFonts.outfit(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 16,
+                          Expanded(
+                            child: Text(
+                              displaySymbol,
+                              style: GoogleFonts.outfit(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
+                              ),
+                              overflow: TextOverflow.ellipsis,
                             ),
                           ),
                           const SizedBox(width: 6),
-                          if (hasLivePrice)
+                          if (hasLivePrice && _isMarketOpen())
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
                               decoration: BoxDecoration(
@@ -581,7 +638,7 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
                                 borderRadius: BorderRadius.circular(4),
                               ),
                               child: Text(
-                                'OFFLINE',
+                                'CLOSED',
                                 style: GoogleFonts.outfit(
                                   color: Colors.white.withOpacity(0.2),
                                   fontSize: 7,
@@ -604,31 +661,37 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
-                    Text(
-                      '₹${currentPrice.toStringAsFixed(2)}',
-                      style: GoogleFonts.outfit(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 15,
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        '₹${currentPrice.toStringAsFixed(2)}',
+                        style: GoogleFonts.outfit(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 15,
+                        ),
                       ),
                     ),
                     const SizedBox(height: 2),
-                    Row(
-                      children: [
-                        Icon(
-                          isDailyUp ? LucideIcons.arrowUpRight : LucideIcons.arrowDownRight,
-                          color: dailyColor,
-                          size: 12,
-                        ),
-                        Text(
-                          '${dailyChangePercent.abs().toStringAsFixed(2)}%',
-                          style: GoogleFonts.outfit(
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Row(
+                        children: [
+                          Icon(
+                            isDailyUp ? LucideIcons.arrowUpRight : LucideIcons.arrowDownRight,
                             color: dailyColor,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
+                            size: 12,
                           ),
-                        ),
-                      ],
+                          Text(
+                            '${dailyChangePercent.abs().toStringAsFixed(2)}%',
+                            style: GoogleFonts.outfit(
+                              color: dailyColor,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ],
                 ),
@@ -684,6 +747,7 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
               border: Border(top: BorderSide(color: Colors.white.withOpacity(0.04))),
             ),
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 // P&L pill
                 Expanded(
@@ -707,48 +771,55 @@ class _PortfolioScreenState extends State<PortfolioScreen> {
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: Text(
-                          '${isProfit ? '+' : '-'}₹${totalPnl.abs().toStringAsFixed(2)}  (${totalPnlPercent.abs().toStringAsFixed(2)}%)',
+                          '${isProfit ? '+' : '-'}₹${totalPnl.abs().toStringAsFixed(0)}  (${totalPnlPercent.abs().toStringAsFixed(2)}%)',
                           style: GoogleFonts.outfit(
                             color: pnlColor,
-                            fontSize: 12.5,
+                            fontSize: 12,
                             fontWeight: FontWeight.bold,
                           ),
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
                     ],
                   ),
                 ),
 
+                const SizedBox(width: 10),
+
                 // Today pill
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Text(
-                      'TODAY',
-                      style: GoogleFonts.outfit(
-                        color: Colors.white24,
-                        fontSize: 9.5,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 0.8,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: dailyColor.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Text(
-                        '${isDailyUp ? '+' : '-'}₹${dailyChangePrice.abs().toStringAsFixed(2)}  (${dailyChangePercent.abs().toStringAsFixed(2)}%)',
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        'TODAY',
                         style: GoogleFonts.outfit(
-                          color: dailyColor,
-                          fontSize: 12.5,
+                          color: Colors.white24,
+                          fontSize: 9.5,
                           fontWeight: FontWeight.bold,
+                          letterSpacing: 0.8,
                         ),
                       ),
-                    ),
-                  ],
+                      const SizedBox(height: 4),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: dailyColor.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          '${isDailyUp ? '+' : '-'}₹${dailyChangePrice.abs().toStringAsFixed(0)}  (${dailyChangePercent.abs().toStringAsFixed(2)}%)',
+                          style: GoogleFonts.outfit(
+                            color: dailyColor,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          textAlign: TextAlign.right,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),

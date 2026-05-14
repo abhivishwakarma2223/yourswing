@@ -159,7 +159,10 @@ def get_stock_analysis(symbol: str, db: Session = Depends(get_db)):
         db.commit()
         db.refresh(stock)
     
-    fetch_daily_candles(symbol) # Ensure fresh data
+    candles = fetch_daily_candles(symbol) # Ensure fresh data
+    if candles:
+        crud.save_candles(db, stock.id, candles)
+        
     analysis = crud.analyze_stock_with_live_price(db, stock.id)
     if not analysis:
         raise HTTPException(status_code=404, detail="Not enough data")

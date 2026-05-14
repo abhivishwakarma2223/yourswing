@@ -166,7 +166,7 @@ class CandleRepository:
                 ) AS rn
             FROM candles c
             JOIN stocks s ON c.stock_id = s.id
-            WHERE s.symbol = %(symbol)s
+            WHERE s.symbol = %(symbol)s {date_filter}
         )
         SELECT
             time,
@@ -204,19 +204,23 @@ class CandleRepository:
         self,
         symbol: str,
         limit: int = PREFERRED_CANDLES,
+        target_date: Optional[date] = None,
     ) -> pd.DataFrame:
 
         conn = self._conn_factory()
+        
+        date_filter = "AND DATE(c.candle_time) <= %(target_date)s" if target_date else ""
+        sql = self.CANDLES_SQL.format(date_filter=date_filter)
+        params = {"symbol": symbol, "limit": limit}
+        if target_date:
+            params["target_date"] = target_date
 
         try:
 
             df = pd.read_sql(
-                self.CANDLES_SQL,
+                sql,
                 conn,
-                params={
-                    "symbol": symbol,
-                    "limit": limit,
-                },
+                params=params,
                 parse_dates=["time"],
             )
 
@@ -251,9 +255,9 @@ class _SymbolProcessor:
         self._repo = repo
         self._limit = candle_limit
 
-    def process(self, symbol: str, market: dict) -> RankingResult:
+    def process(self, symbol: str, market: dict, target_date: Optional[date] = None) -> RankingResult:
 
-        df = self._fetch(symbol)
+        df = self._fetch(symbol, target_date)
 
         self._validate(symbol, df)
 
@@ -270,9 +274,9 @@ class _SymbolProcessor:
     # FETCH
     # ========================================================
 
-    def _fetch(self, symbol: str) -> pd.DataFrame:
+    def _fetch(self, symbol: str, target_date: Optional[date] = None) -> pd.DataFrame:
 
-        df = self._repo.get_candles(symbol, self._limit)
+        df = self._repo.get_candles(symbol, self._limit, target_date=target_date)
 
         if df is None or df.empty:
             raise ValueError("No candle data returned")
@@ -459,6 +463,7 @@ class RankingEngine:
     def run(
         self,
         symbols: Optional[list[str]] = None,
+        target_date: Optional[date] = None,
     ) -> RankingReport:
 
         t_start = time.perf_counter()
@@ -493,7 +498,7 @@ class RankingEngine:
         candles_by_symbol = {}
         for sym in symbols:
             try:
-                cdf = self._repo.get_candles(sym, PREFERRED_CANDLES)
+                cdf = self._repo.get_candles(sym, PREFERRED_CANDLES, target_date=target_date)
                 if not cdf.empty:
                     # Run basic indicators for breadth/sector analysis (needs EMA50)
                     cdf = calculate_indicators(cdf)
@@ -518,7 +523,7 @@ class RankingEngine:
         )
 
         ranked, errors = self._run_parallel(
-            symbols, market, rs_rankings, sector_data
+            symbols, market, rs_rankings, sector_data, target_date
         )
 
         ranked.sort(
@@ -586,6 +591,7 @@ class RankingEngine:
         market: dict,
         rs_rankings: dict,
         sector_data: dict,
+        target_date: Optional[date] = None,
     ):
 
         ranked: list[RankingResult] = []
@@ -601,7 +607,8 @@ class RankingEngine:
                     symbol,
                     market,
                     rs_rankings,
-                    sector_data
+                    sector_data,
+                    target_date
                 ): symbol
                 for symbol in symbols
             }
@@ -652,6 +659,7 @@ class RankingEngine:
         market: dict,
         rs_rankings: dict,
         sector_data: dict,
+        target_date: Optional[date] = None,
     ):
 
         t0 = time.perf_counter()
@@ -661,7 +669,7 @@ class RankingEngine:
         try:
 
             stage = "fetch"
-            df = self._processor._fetch(symbol)
+            df = self._processor._fetch(symbol, target_date)
 
             stage = "validate"
             self._processor._validate(symbol, df)
@@ -753,6 +761,7 @@ def run_full_ranking(
     db_conn_factory,
     symbols: Optional[list[str]] = None,
     max_workers: int = DEFAULT_WORKERS,
+    target_date: Optional[date] = None,
 ):
 
     engine = RankingEngine(
@@ -760,4 +769,4 @@ def run_full_ranking(
         max_workers=max_workers,
     )
 
-    return engine.run(symbols=symbols)
+    return engine.run(symbols=symbols, target_date=target_date)

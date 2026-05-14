@@ -4,11 +4,11 @@ import 'package:http/http.dart' as http;
 class ApiService {
   // Use localhost for development, Railway for production
   // Note: On Android Emulator, use 10.0.2.2 instead of localhost
-  static const bool _isProduction = false; 
-  
-  final String baseUrl = _isProduction 
-    ? 'https://yourswing-production.up.railway.app/api'
-    : 'http://localhost:8000/api';
+  static const bool _isProduction = false;
+
+  final String baseUrl = _isProduction
+      ? 'https://yourswing-production.up.railway.app/api'
+      : 'http://localhost:8000/api';
 
   Future<Map<String, dynamic>?> fetchStockAnalysis(String symbol) async {
     // Normalize: ensure it's uppercase

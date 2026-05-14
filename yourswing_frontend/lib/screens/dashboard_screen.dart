@@ -189,7 +189,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Widget _buildDynamicSummaryCard(Map<String, double> stats, bool isPortfolioLoading) {
-    bool isProfit = stats['pnl']! >= 0;
+    bool isProfit = (stats['pnl'] ?? 0) >= 0;
+    final double dailyChange = stats['dailyChange'] ?? 0;
+    final bool isDailyUp = dailyChange >= 0;
+    final double invested = stats['invested'] ?? 0;
+    final double current = stats['current'] ?? 0;
+
     return Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(28),
@@ -239,6 +244,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // Header row
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
@@ -262,7 +268,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         visualDensity: VisualDensity.compact,
                         padding: const EdgeInsets.all(4),
                         constraints: const BoxConstraints(),
-                        icon: isPortfolioLoading 
+                        icon: isPortfolioLoading
                             ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                             : Icon(LucideIcons.refreshCw, color: Colors.white.withOpacity(0.4), size: 16),
                         onPressed: _refreshAll,
@@ -271,11 +277,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ],
                 ),
                 const SizedBox(height: 12),
+
+                // Big current value number
                 FittedBox(
                   fit: BoxFit.scaleDown,
                   alignment: Alignment.centerLeft,
                   child: Text(
-                    '₹${stats['total']!.toStringAsFixed(2)}',
+                    '₹${current.toStringAsFixed(2)}',
                     style: GoogleFonts.outfit(
                       color: Colors.white,
                       fontSize: 42,
@@ -284,53 +292,104 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ),
                   ),
                 ),
-                const SizedBox(height: 20),
-                FittedBox(
-                  fit: BoxFit.scaleDown,
-                  alignment: Alignment.centerLeft,
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: (isProfit ? AppTheme.signalBuy : AppTheme.signalAvoid).withOpacity(0.12),
-                          borderRadius: BorderRadius.circular(14),
-                          border: Border.all(
-                            color: (isProfit ? AppTheme.signalBuy : AppTheme.signalAvoid).withOpacity(0.2),
-                          ),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              isProfit ? LucideIcons.trendingUp : LucideIcons.trendingDown,
-                              color: isProfit ? AppTheme.signalBuy : AppTheme.signalAvoid,
-                              size: 16,
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              '${isProfit ? '+' : ''}₹${stats['pnl']!.toStringAsFixed(2)} (${stats['percent']!.toStringAsFixed(1)}%)',
-                              style: GoogleFonts.outfit(
-                                color: isProfit ? AppTheme.signalBuy : AppTheme.signalAvoid,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 14,
-                              ),
-                            ),
-                          ],
+                const SizedBox(height: 16),
+
+                // P&L pill + Today's change pill
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 8,
+                  children: [
+                    // Overall P&L
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: (isProfit ? AppTheme.signalBuy : AppTheme.signalAvoid).withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: (isProfit ? AppTheme.signalBuy : AppTheme.signalAvoid).withOpacity(0.2),
                         ),
                       ),
-                      const SizedBox(width: 14),
-                      Text(
-                        'Live Performance',
-                        style: GoogleFonts.outfit(
-                          color: Colors.white.withOpacity(0.3),
-                          fontSize: 13,
-                          fontWeight: FontWeight.w400,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            isProfit ? LucideIcons.trendingUp : LucideIcons.trendingDown,
+                            color: isProfit ? AppTheme.signalBuy : AppTheme.signalAvoid,
+                            size: 15,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            '${isProfit ? '+' : ''}₹${(stats['pnl'] ?? 0).toStringAsFixed(0)}  (${(stats['percent'] ?? 0).toStringAsFixed(1)}%)',
+                            style: GoogleFonts.outfit(
+                              color: isProfit ? AppTheme.signalBuy : AppTheme.signalAvoid,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    // Today's change pill
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: (isDailyUp ? AppTheme.signalBuy : AppTheme.signalAvoid).withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: (isDailyUp ? AppTheme.signalBuy : AppTheme.signalAvoid).withOpacity(0.15),
                         ),
-                      )
-                    ],
-                  ),
-                )
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            isDailyUp ? LucideIcons.arrowUpRight : LucideIcons.arrowDownRight,
+                            color: isDailyUp ? AppTheme.signalBuy : AppTheme.signalAvoid,
+                            size: 15,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Today  ${isDailyUp ? '+' : '-'}₹${dailyChange.abs().toStringAsFixed(0)}',
+                            style: GoogleFonts.outfit(
+                              color: isDailyUp ? AppTheme.signalBuy : AppTheme.signalAvoid,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 20),
+
+                // Divider
+                Container(height: 1, color: Colors.white.withOpacity(0.06)),
+                const SizedBox(height: 16),
+
+                // Invested vs Current 2-col stats
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildDashStat(
+                        'Invested',
+                        '₹${invested.toStringAsFixed(2)}',
+                        LucideIcons.wallet,
+                        Colors.white38,
+                      ),
+                    ),
+                    Container(width: 1, height: 36, color: Colors.white.withOpacity(0.07)),
+                    Expanded(
+                      child: _buildDashStat(
+                        'Current',
+                        '₹${current.toStringAsFixed(2)}',
+                        LucideIcons.barChart2,
+                        AppTheme.primaryLight.withOpacity(0.8),
+                        align: TextAlign.right,
+                      ),
+                    ),
+                  ],
+                ),
               ],
             ),
           ),
@@ -338,6 +397,53 @@ class _DashboardScreenState extends State<DashboardScreen> {
       ),
     ).animate().fade(delay: 100.ms).slideY(begin: 0.2, curve: Curves.easeOutQuad);
   }
+
+  Widget _buildDashStat(String label, String value, IconData icon, Color color, {TextAlign align = TextAlign.left}) {
+    final isRight = align == TextAlign.right;
+    return Padding(
+      padding: EdgeInsets.only(left: isRight ? 16 : 0, right: isRight ? 0 : 16),
+      child: Column(
+        crossAxisAlignment: isRight ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: isRight ? MainAxisAlignment.end : MainAxisAlignment.start,
+            children: [
+              if (!isRight) ...[
+                Icon(icon, size: 11, color: Colors.white24),
+                const SizedBox(width: 4),
+              ],
+              Text(
+                label,
+                style: GoogleFonts.outfit(
+                  color: Colors.white24,
+                  fontSize: 11,
+                  letterSpacing: 0.2,
+                ),
+              ),
+              if (isRight) ...[
+                const SizedBox(width: 4),
+                Icon(icon, size: 11, color: Colors.white24),
+              ],
+            ],
+          ),
+          const SizedBox(height: 4),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: isRight ? Alignment.centerRight : Alignment.centerLeft,
+            child: Text(
+              value,
+              style: GoogleFonts.outfit(
+                color: color,
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
 
   Widget _buildTrendingTile(Map<String, dynamic> stock) {
     final double price = (stock['price'] ?? 0.0).toDouble();

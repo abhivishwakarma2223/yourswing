@@ -754,6 +754,9 @@ def score_stock(latest: dict, market: Optional[dict] = None) -> dict:
         # ── Market Regime ─────────────────────────────────────────────
         if market:
             regime_data = classify_market_regime(market)
+            # NEW: Allow forcing a multiplier for consistency with snapshots
+            if "force_multiplier" in market:
+                regime_data["multiplier"] = market["force_multiplier"]
         else:
             regime_data = {
                 "regime": "CHOPPY_BULL",

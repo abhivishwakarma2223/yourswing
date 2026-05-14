@@ -85,7 +85,7 @@ def run_daily_snapshot(
     from app.preprocessing.sector_intelligence import get_sector_for_symbol
 
     engine  = RankingEngine(db_conn_factory, max_workers=10)
-    report  = engine.run()
+    report  = engine.run(target_date=today)
 
     if not report.ranked:
         return {"status": "error", "reason": "no_results", "date": str(today)}
@@ -97,7 +97,7 @@ def run_daily_snapshot(
 
     for r in top_candidates:
         try:
-            latest_row = _get_latest_indicators(r.symbol, db_conn_factory)
+            latest_row = _get_latest_indicators(r.symbol, db_conn_factory, target_date=today)
             setup_type = _detect_setup_type(latest_row)
             zones      = _compute_entry_zones(latest_row)
 
@@ -176,7 +176,7 @@ def run_daily_snapshot(
     }
 
 
-def _get_latest_indicators(symbol: str, db_conn_factory) -> dict:
+def _get_latest_indicators(symbol: str, db_conn_factory, target_date: Optional[date] = None) -> dict:
     try:
         from app.ranking_engine import CandleRepository, PREFERRED_CANDLES
         from app.indicator_engine import calculate_indicators
@@ -186,7 +186,7 @@ def _get_latest_indicators(symbol: str, db_conn_factory) -> dict:
         )
 
         repo = CandleRepository(db_conn_factory)
-        df   = repo.get_candles(symbol, PREFERRED_CANDLES)
+        df   = repo.get_candles(symbol, PREFERRED_CANDLES, target_date=target_date)
         if df is None or df.empty: return {}
 
         df = calculate_indicators(df)

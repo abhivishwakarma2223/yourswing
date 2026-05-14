@@ -2,7 +2,7 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 from app.schemas import CandleCreate
 import pandas as pd
-from sqlalchemy import desc
+from sqlalchemy import desc, text
 from .models import *
 
 
@@ -81,26 +81,68 @@ def get_latest_analysis(db, stock_id, live_price=None):
     if df.empty:
         return None
 
-    # Core indicators
-    df = calculate_indicators(df)
     symbol = db.query(Stock.symbol).filter(Stock.id == stock_id).scalar()
+
+    # NEW: Inject live price into the DataFrame for real-time indicator accuracy
+    if live_price is not None and live_price > 0:
+        import numpy as np
+        # Get the last row to copy metadata
+        last_date = df['time'].iloc[-1]
+        # Estimate today's date (this is just for the indicator series, won't be saved)
+        new_date = last_date + pd.Timedelta(days=1)
+        
+        # Add a temporary "today" row
+        live_row = pd.DataFrame([{
+            "time": new_date,
+            "open": live_price, # Simplified
+            "high": live_price,
+            "low": live_price,
+            "close": live_price,
+            "volume": df["volume"].iloc[-1] # Carry over last volume as proxy
+        }])
+        df = pd.concat([df, live_row], ignore_index=True)
+
+    # 3. Inject Institutional Intelligence (if available)
+    # This ensures searched stocks match the scores in the Trending list
+    snapshot = db.execute(text("""
+        SELECT rs_percentile, sector, regime, regime_multiplier 
+        FROM daily_stock_candidates 
+        WHERE symbol = :sym 
+        ORDER BY trade_date DESC LIMIT 1
+    """), {"sym": symbol}).mappings().first()
+
+    # Core indicators - now includes the live price point
+    from app.indicator_engine import calculate_indicators
+    df = calculate_indicators(df)
     
-    # For single-stock analysis, we might not have batch RS/Sector data pre-computed.
-    # We'll compute it on the fly for just this symbol if needed, though RS ranking usually needs the whole universe.
-    # For simplicity, we'll pass None and the pipeline will use defaults/cached data if available.
-    market = get_market_regime_dict()
+    # 4. Run full institutional pipeline
+    # We pass the cached RS rank if found. Note: we use 'is not None' because 0.0 is a valid rank
+    rs_rankings = None
+    if snapshot and snapshot["rs_percentile"] is not None:
+        rs_rankings = {symbol: {"RS_PERCENTILE_RANK": float(snapshot["rs_percentile"])}}
+        
+    sector_data = None
+    if snapshot and snapshot["sector"]:
+        # Match the key format expected by compute_sector_data in the pipeline
+        sector_data = {symbol: {"sector_name": snapshot["sector"]}}
     
-    # Run full institutional pipeline
-    df = run_preprocessing_pipeline(symbol, df)
+    df = run_preprocessing_pipeline(symbol, df, rs_rankings=rs_rankings, sector_data=sector_data)
     
     latest_row = df.iloc[-1].to_dict()
-    
-    # NEW: If live price is provided, update the latest row before scoring
-    if live_price is not None and live_price > 0:
-        latest_row['close'] = live_price
-        # Optional: update other price-dependent indicators if necessary, 
-        # but most scoring logic uses 'close' or 'price'
-        latest_row['price'] = live_price
+    latest_row['price'] = live_price if live_price else latest_row['close']
+
+    # 5. Market Regime
+    # Use the same multiplier from the snapshot for consistency, or fallback to fresh calc
+    market = get_market_regime_dict()
+    if snapshot:
+        if snapshot["regime_multiplier"] is not None:
+            market["force_multiplier"] = float(snapshot["regime_multiplier"])
+        elif snapshot["regime"]:
+            # Fallback: map regime name to standard multiplier
+            from app.scoring_engine import REGIME_MULTIPLIERS
+            reg_name = snapshot["regime"]
+            if reg_name in REGIME_MULTIPLIERS:
+                market["force_multiplier"] = REGIME_MULTIPLIERS[reg_name]
 
     def clean_val(v):
         try:
@@ -110,8 +152,9 @@ def get_latest_analysis(db, stock_id, live_price=None):
             return f
         except (TypeError, ValueError):
             return 0.0
-
+            
     score_result = score_stock(latest_row, market=market)
+    
     score = score_result["final_score"]
     signal = score_result["signal"]
 
@@ -181,6 +224,7 @@ def analyze_stock_with_live_price(db: Session, stock_id: int):
         
     return {
         "symbol": stock.symbol.upper(),
+        "price": round(live_price, 2),
         "live_price": round(live_price, 2),
         "previous_close": round(previous_close, 2),
         "change": change,
