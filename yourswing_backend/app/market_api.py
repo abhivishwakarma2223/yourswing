@@ -97,7 +97,11 @@ def fetch_batch_prices(symbols: List[str]) -> Dict:
         with engine.connect() as conn:
             # Normalize to uppercase for DB lookup
             upper_symbols = [s.upper() for s in symbols]
-            query = text("SELECT symbol, live_price, live_change, live_change_pct FROM live_market_state WHERE symbol = ANY(:symbols)")
+            from datetime import date
+            today = date.today()
+            market_closed = is_market_closed()
+
+            query = text("SELECT symbol, live_price, live_change, live_change_pct, updated_at FROM live_market_state WHERE symbol = ANY(:symbols)")
             cache_rows = conn.execute(query, {"symbols": upper_symbols}).mappings().all()
             
             cache_map = {r["symbol"]: r for r in cache_rows}
@@ -106,11 +110,20 @@ def fetch_batch_prices(symbols: List[str]) -> Dict:
                 s_upper = orig.upper()
                 if s_upper in cache_map:
                     row = cache_map[s_upper]
-                    results[orig] = {
-                        "price": float(row["live_price"]),
-                        "change": float(row["live_change"] or 0.0),
-                        "changePercent": float(row["live_change_pct"] or 0.0)
-                    }
+                    
+                    # Cache is valid if:
+                    # 1. It was updated today
+                    # 2. OR the market is currently closed (showing last available price is fine)
+                    cache_date = row["updated_at"].date() if row["updated_at"] else None
+                    if cache_date == today or market_closed:
+                        results[orig] = {
+                            "price": float(row["live_price"]),
+                            "change": float(row["live_change"] or 0.0),
+                            "changePercent": float(row["live_change_pct"] or 0.0)
+                        }
+                    else:
+                        # Cache is stale and market is open -> fetch fresh
+                        remaining_symbols.append(orig)
                 else:
                     remaining_symbols.append(orig)
     except Exception as e:

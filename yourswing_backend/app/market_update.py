@@ -32,13 +32,20 @@ def run_live_update(db: Session) -> dict:
     t_start = datetime.now(timezone.utc)
     today = date.today()
 
+    # 1. Get candidates to update. 
+    # Use latest available trade_date if today's snapshot isn't ready (which is usually the case during market hours)
+    latest_date_row = db.execute(text("SELECT MAX(trade_date) FROM daily_stock_candidates")).scalar()
+    
+    if not latest_date_row:
+        return {"status": "skipped", "reason": "no_candidates_at_all"}
+
     rows  = db.execute(text("""
         SELECT symbol, final_score, signal, latest_price, atr_percent, breakout
         FROM daily_stock_candidates
         WHERE trade_date = :td
         ORDER BY final_score DESC
         LIMIT 50
-    """), {"td": today}).mappings().all()
+    """), {"td": latest_date_row}).mappings().all()
 
     if not rows:
         return {"status": "skipped", "reason": "no_daily_candidates"}
